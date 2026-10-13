@@ -6,8 +6,12 @@ import random
 import sys
 from dotenv import load_dotenv, find_dotenv
 
+# Get the path of the current file's directory, then move one folder up
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dotenv_path = os.path.join(parent_dir, '.env')
+
 # Load variables from .env file
-load_dotenv(find_dotenv())
+load_dotenv(dotenv_path=dotenv_path)
 
 # Read configurations or fall back to defaults if not found
 PC_IP = os.getenv("SERVER_IP", "127.0.0.1") 

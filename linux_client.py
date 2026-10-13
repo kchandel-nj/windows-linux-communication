@@ -1,13 +1,18 @@
+import os
 import socket
 import json
 import time
 import random
 import sys
+from dotenv import load_dotenv, find_dotenv
 
-# !!! REPLACE WITH YOUR ACTUAL WINDOWS IP ADDRESS !!!
-PC_IP = '172.21.117.21'  
-PC_PORT = 5001
-DEVICE_ID = "linux_node_01"
+# Load variables from .env file
+load_dotenv(find_dotenv())
+
+# Read configurations or fall back to defaults if not found
+PC_IP = os.getenv("SERVER_IP", "127.0.0.1") 
+PC_PORT = int(os.getenv("SERVER_PORT", 5001))
+DEVICE_ID = os.getenv("DEVICE_ID", "unknown_node")
 
 def send_packet(payload):
     """Sends JSON packet to Windows. Returns True if successful, False if server is offline."""

@@ -1,9 +1,10 @@
-# Wireless JSON Telemetry Stream (With Bidirectional Exit Handling)
+# Wireless JSON Telemetry Stream (With Environment Variables & Fallbacks)
 
-This system establishes a robust, cross-platform, real-time wireless communication bridge between a **Linux Client (or Raspberry Pi)** and a **Windows Server**. It uses standard TCP/IP network sockets over Wi-Fi to send structured JSON packets, handle remote connection drops, and recover automatically without crashing.
+This system establishes a robust, cross-platform, real-time wireless communication bridge between a **Linux Client (or Raspberry Pi)** and a **Windows Server**. It uses standard TCP/IP network sockets over Wi-Fi to send structured JSON payloads, manages unexpected connection dropouts cleanly, and extracts networking parameters safely using environment files.
 
 ## Current Functionality
 
+*   **Decoupled Configuration Engine (`.env`):** System variables, host IP allocations, ports, and unique device nodes are extracted dynamically at script initialization using an external configuration file.
 *   **Bidirectional Network Loop:** The Linux node bundles hardware metrics into JSON telemetry objects, transmits them wirelessly, and receives back a confirmation receipt.
 *   **Centralized Heavy Data Processing:** The Windows machine operates as a persistent server daemon, intercepting streams, processing values (e.g., threshold logic), and returning responses.
 *   **Graceful Client Shutdown Alert:** Pressing `Ctrl+C` on the Linux client triggers a catch intercept, sending a final `"status": "SHUTDOWN"` packet to inform the Windows server before exiting.
@@ -35,15 +36,6 @@ This system establishes a robust, cross-platform, real-time wireless communicati
 }
 ```
 
-### 3. Graceful Client Teardown Alert (Linux ➔ Windows)
-```json
-{
-  "status": "SHUTDOWN",
-  "device_id": "linux_node_01",
-  "message": "User terminated client script via Ctrl+C."
-}
-```
-
 ---
 
 ## Setup & Deployment Instructions
@@ -52,14 +44,22 @@ This system establishes a robust, cross-platform, real-time wireless communicati
 * Both computers must reside on the **same Wi-Fi or local network**.
 * Python 3.x must be installed on both systems.
 
-### Step 1: Find the Windows Host IP
-Open **Command Prompt** on Windows, execute `ipconfig`, and extract your wireless network interface's **IPv4 Address** (typically matching format `192.168.1.X` or `10.0.0.X`).
-
-### Step 2: Configure the Client Script
-Open your `linux_client.py` script on the Linux system and replace the default target address string with your newly extracted Windows IP address:
-```python
-PC_IP = 'YOUR_EXTRACTED_WINDOWS_IP_HERE'
+### Step 1: Install Dependencies
+Execute the following package management command on **both** your Windows host and the Linux/Pi client to handle `.env` parsing:
+```bash
+pip install python-dotenv
 ```
+
+### Step 2: Configure the Environment Variables
+Create a file named exactly `.env` (no extension, just the dot) in your project root folder on both machines. Fill it with your target local network routing data:
+
+```env
+# Network Setup Configuration
+SERVER_IP=192.168.1.50
+SERVER_PORT=5001
+DEVICE_ID=linux_node_01
+```
+*(On Windows, `SERVER_IP` is ignored as it binds locally to `0.0.0.0`, but `SERVER_PORT` must match your client allocation).*
 
 ### Step 3: Launch the Windows Processing Daemon
 Open **PowerShell** or **Command Prompt** on Windows, navigate to your script workspace directory, and execute:
@@ -82,4 +82,4 @@ python3 linux_client.py
 | :--- | :--- |
 | **Ctrl+C on Linux Client** | Linux pauses execution ➔ transmits `SHUTDOWN` block to Windows ➔ Windows terminal alerts `[ALERT] Linux Client was disconnected...` ➔ Linux closes cleanly. |
 | **Ctrl+C on Windows Server** | Windows drops out ➔ Linux catches connection refusal on next loop ➔ Linux alerts `[ALERT] Windows Server went offline!` ➔ Linux spins in standby checking for server. |
-| **Windows Server Restarts** | Linux standby scanner finds open port 5001 on host ➔ prints `[RECONNECTED] Windows Server is back online!` ➔ Telemetry cycle automatically resumes. |
+| **Windows Server Restarts** | Linux standby scanner finds open port on host ➔ prints `[RECONNECTED] Windows Server is back online!` ➔ Telemetry cycle automatically resumes. |

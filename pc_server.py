@@ -1,9 +1,15 @@
+import os
 import socket
 import json
 import sys
+from dotenv import load_dotenv, find_dotenv
 
+# Load variables from .env file
+load_dotenv(find_dotenv())
+
+# Server listens on 0.0.0.0 (all network paths), pulls port from .env
 SERVER_HOST = '0.0.0.0'
-SERVER_PORT = 5001
+SERVER_PORT = int(os.getenv("SERVER_PORT", 5001))
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

@@ -1,21 +1,23 @@
-# Wireless JSON Telemetry Stream (Windows-Linux Bridge)
+# Wireless JSON Telemetry Stream (With Bidirectional Exit Handling)
 
-This system establishes a cross-platform, real-time wireless communication bridge between a **Linux Client (or Raspberry Pi)** and a **Windows Server**. It is optimized for transmitting lightweight, structured data blocks using the TCP/IP protocol over local Wi-Fi.
+This system establishes a robust, cross-platform, real-time wireless communication bridge between a **Linux Client (or Raspberry Pi)** and a **Windows Server**. It uses standard TCP/IP network sockets over Wi-Fi to send structured JSON packets, handle remote connection drops, and recover automatically without crashing.
 
 ## Current Functionality
 
-*   **Bidirectional Network Loop:** The Linux node bundles hardware/sensor state variables into standard JSON telemetry objects, transmits them wirelessly, waits for a receipt payload, and confirms receipt.
-*   **Centralized Heavy Data Processing:** The Windows machine operates as a persistent daemon. It intercepts incoming socket streams, serializes the string back into JSON, injects your math equations or business threshold logic, and spits back a response object.
-*   **Newline-Delimited Framing (`\n`):** Network socket streams can fragment data packets over Wi-Fi. The scripts use a manual `\n` buffer scanner to cleanly separate consecutive JSON transmissions without corrupting payloads.
-*   **Socket Portfolio Reuse:** Includes immediate port reuse flags (`SO_REUSEADDR`) on the host to prevent port lockups if you rapidly start or crash scripts during prototyping.
+*   **Bidirectional Network Loop:** The Linux node bundles hardware metrics into JSON telemetry objects, transmits them wirelessly, and receives back a confirmation receipt.
+*   **Centralized Heavy Data Processing:** The Windows machine operates as a persistent server daemon, intercepting streams, processing values (e.g., threshold logic), and returning responses.
+*   **Graceful Client Shutdown Alert:** Pressing `Ctrl+C` on the Linux client triggers a catch intercept, sending a final `"status": "SHUTDOWN"` packet to inform the Windows server before exiting.
+*   **Automated Server Standby & Reconnection:** If the Windows server is killed (`Ctrl+C` or a crash), the Linux client instantly catches the network error, drops into a low-overhead **Standby Mode**, and polls every 5 seconds until Windows turns back on to seamlessly resume.
+*   **Framing & Reuse Controls:** Includes `\n` newline parsing to prevent socket fragmentation and `SO_REUSEADDR` to bypass OS port-lock limitations during fast script restarts.
 
 ---
 
-## Architectural Data Schema
+## State Machine Data Schema
 
 ### 1. Inbound Telemetry Payload (Linux ➔ Windows)
 ```json
 {
+  "status": "RUNNING",
   "device_id": "linux_node_01",
   "timestamp": 1791924960.0,
   "sensor_reading": 62.45,
@@ -30,6 +32,15 @@ This system establishes a cross-platform, real-time wireless communication bridg
   "device_id": "linux_node_01",
   "computed_value": 65.88,
   "alert_triggered": false
+}
+```
+
+### 3. Graceful Client Teardown Alert (Linux ➔ Windows)
+```json
+{
+  "status": "SHUTDOWN",
+  "device_id": "linux_node_01",
+  "message": "User terminated client script via Ctrl+C."
 }
 ```
 
@@ -63,5 +74,12 @@ Open a desktop terminal or SSH instance on your Linux system / Raspberry Pi, nav
 python3 linux_client.py
 ```
 
-### Interruption
-To safely terminate either network engine execution at any point, focus that explicit terminal terminal window and issue a keyboard interupt hook: `Ctrl + C`.
+---
+
+## Network Failure Scenarios & Behavior
+
+| Event Scenario | System Behavior |
+| :--- | :--- |
+| **Ctrl+C on Linux Client** | Linux pauses execution ➔ transmits `SHUTDOWN` block to Windows ➔ Windows terminal alerts `[ALERT] Linux Client was disconnected...` ➔ Linux closes cleanly. |
+| **Ctrl+C on Windows Server** | Windows drops out ➔ Linux catches connection refusal on next loop ➔ Linux alerts `[ALERT] Windows Server went offline!` ➔ Linux spins in standby checking for server. |
+| **Windows Server Restarts** | Linux standby scanner finds open port 5001 on host ➔ prints `[RECONNECTED] Windows Server is back online!` ➔ Telemetry cycle automatically resumes. |

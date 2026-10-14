@@ -1,0 +1,11 @@
+services:
+  voice-client:
+    build: .
+    container_name: voice-client
+    env_file: .env              # SERVER_IP, SERVER_PORT, DEVICE_ID, MIC_DEVICE, ...
+    devices:
+      - /dev/snd:/dev/snd       # give the container the host's sound hardware
+    stop_signal: SIGINT         # "docker compose stop" acts like Ctrl+C -> SHUTDOWN sent to Windows
+    stop_grace_period: 5s
+    restart: unless-stopped     # come back up after reboots/crashes
+    tty: true

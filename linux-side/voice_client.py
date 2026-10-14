@@ -135,9 +135,13 @@ def main():
                 except OSError as e:  # reset, broken pipe, timeout
                     print(f"[ALERT] Lost connection to Windows ({e}). '{text}' was not processed.")
                     sock.close()
+                    
+                    # 1. Reconnect (Blocks here for multiples of 5 seconds)
                     sock = connect()
                     buffer = b""
-                    clear_audio_queue()  # drop speech captured while offline
+                    
+                    # 2. CLEAR HERE right before restarting the audio loop
+                    clear_audio_queue()  
                     rec.Reset()
                     print("[LISTENING] Back online. Speak a command.")
 

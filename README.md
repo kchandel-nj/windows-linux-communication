@@ -30,6 +30,7 @@ SERVER_PORT=5001
 OLLAMA_MODEL=llama3.2
 OLLAMA_URL=http://localhost:11434/api/generate
 OLLAMA_TIMEOUT=50          # keep below the client's RESPONSE_TIMEOUT
+OLLAMA_KEEP_ALIVE=-1       # keep the model loaded in GPU memory (or e.g. 30m)
 ```
 
 Wrist computer:

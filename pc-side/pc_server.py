@@ -30,6 +30,7 @@ SERVER_PORT = int(os.getenv("SERVER_PORT", 5001))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", 50))  # keep below the client's RESPONSE_TIMEOUT
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "-1")  # -1 = keep model loaded in VRAM
 
 # Edit this to match your real telemetry schema.
 SYSTEM_PROMPT = """You are the onboard assistant for a lunar EVA suit system.
@@ -48,6 +49,7 @@ def ask_ollama(text):
         "prompt": text,
         "stream": False,
         "format": "json",          # Ollama forces valid JSON output
+        "keep_alive": int(OLLAMA_KEEP_ALIVE) if OLLAMA_KEEP_ALIVE.lstrip("-").isdigit() else OLLAMA_KEEP_ALIVE,
     }).encode("utf-8")
     req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:

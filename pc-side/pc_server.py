@@ -49,6 +49,7 @@ def ask_ollama(text):
         "prompt": text,
         "stream": False,
         "format": "json",          # Ollama forces valid JSON output
+        "options": {"num_predict": 300},  # cap reply length so output can't run on forever
         "keep_alive": int(OLLAMA_KEEP_ALIVE) if OLLAMA_KEEP_ALIVE.lstrip("-").isdigit() else OLLAMA_KEEP_ALIVE,
     }).encode("utf-8")
     req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
@@ -72,7 +73,11 @@ def handle_message(message):
         print(f"[COMMAND] {device_id}: {text}")
         try:
             result = ask_ollama(text)
-        except OSError as e:  # Ollama not running, timeout, connection refused
+        except (TimeoutError, socket.timeout) as e:  # Ollama reachable but too slow
+            print(f"[Error] Ollama took longer than {OLLAMA_TIMEOUT:.0f}s: {e}")
+            return {"status": "ERROR", "device_id": device_id, "command": text,
+                    "error": f"Ollama timed out after {OLLAMA_TIMEOUT:.0f}s"}
+        except OSError as e:  # Ollama not running, connection refused, HTTP error
             print(f"[Error] Ollama unreachable: {e}")
             return {"status": "ERROR", "device_id": device_id, "command": text,
                     "error": f"Ollama unreachable: {e}"}

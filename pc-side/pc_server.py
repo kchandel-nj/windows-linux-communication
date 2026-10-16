@@ -45,7 +45,7 @@ try:
                 client_socket.close()
                 continue
                 
-            print(f"[Received Telemetry]: {message}")
+            print(f"[Received Telemetry]: {message}\n")
             
             sensor_val = message.get("sensor_reading", 0)
             processed_response = {
@@ -59,7 +59,7 @@ try:
             client_socket.sendall(response_bytes)
             
         except json.JSONDecodeError:
-            print("[Error] Received invalid JSON format.")
+            print("[Error] Received invalid JSON format.\n")
             
         client_socket.close()
 

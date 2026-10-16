@@ -1,85 +1,134 @@
-# Wireless JSON Telemetry Stream (With Environment Variables & Fallbacks)
+# SIRIUS Voice Command Pipeline
 
-This system establishes a robust, cross-platform, real-time wireless communication bridge between a **Linux Client (or Raspberry Pi)** and a **Windows Server**. It uses standard TCP/IP network sockets over Wi-Fi to send structured JSON payloads, manages unexpected connection dropouts cleanly, and extracts networking parameters safely using environment files.
+A crew member's wrist computer (Linux / Raspberry Pi) captures a command, sends it to the central hub (Windows desktop), the hub runs it through a local Ollama model, and a JSON telemetry reply comes back.
 
-## Current Functionality
-
-*   **Decoupled Configuration Engine (`.env`):** System variables, host IP allocations, ports, and unique device nodes are extracted dynamically at script initialization using an external configuration file.
-*   **Bidirectional Network Loop:** The Linux node bundles hardware metrics into JSON telemetry objects, transmits them wirelessly, and receives back a confirmation receipt.
-*   **Centralized Heavy Data Processing:** The Windows machine operates as a persistent server daemon, intercepting streams, processing values (e.g., threshold logic), and returning responses.
-*   **Graceful Client Shutdown Alert:** Pressing `Ctrl+C` on the Linux client triggers a catch intercept, sending a final `"status": "SHUTDOWN"` packet to inform the Windows server before exiting.
-*   **Automated Server Standby & Reconnection:** If the Windows server is killed (`Ctrl+C` or a crash), the Linux client instantly catches the network error, drops into a low-overhead **Standby Mode**, and polls every 5 seconds until Windows turns back on to seamlessly resume.
-*   **Framing & Reuse Controls:** Includes `\n` newline parsing to prevent socket fragmentation and `SO_REUSEADDR` to bypass OS port-lock limitations during fast script restarts.
-
----
-
-## State Machine Data Schema
-
-### 1. Inbound Telemetry Payload (Linux ➔ Windows)
-```json
-{
-  "status": "RUNNING",
-  "device_id": "linux_node_01",
-  "timestamp": 1791924960.0,
-  "sensor_reading": 62.45,
-  "battery_percent": 94
-}
+```
+Crew voice / typed text
+        │
+        ▼
+Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Windows)
+  voice_client.py                                     pc_server.py
+  Vosk speech-to-text                                 Ollama (localhost:11434)
+        ▲                                             NASA TSS ingest
+        └────────────── JSON telemetry reply ─────────────┘
 ```
 
-### 2. Processed Response Payload (Windows ➔ Linux)
-```json
-{
-  "status": "SUCCESS",
-  "device_id": "linux_node_01",
-  "computed_value": 65.88,
-  "alert_triggered": false
-}
+## Files
+
+| File | Where it runs | Purpose |
+|---|---|---|
+| `voice_client.py` | Wrist computer | Captures commands (voice or text), sends them to the hub, prints replies |
+| `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
+| `.env` | Both | IPs, port, device ID, and client settings |
+| `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `.dockerignore` | Wrist computer | Containerized client, Vosk model included |
+
+## Configuration (`.env`)
+
+Hub (`.env` one folder above `pc_server.py`):
 ```
-
----
-
-## Setup & Deployment Instructions
-
-### Prerequisites
-* Both computers must reside on the **same Wi-Fi or local network**.
-* Python 3.x must be installed on both systems.
-
-### Step 1: Install Dependencies
-Execute the following package management command on **both** your Windows host and the Linux/Pi client to handle `.env` parsing:
-```bash
-pip install python-dotenv
-```
-
-### Step 2: Configure the Environment Variables
-Create a file named exactly `.env` (no extension, just the dot) in your project root folder on both machines. Fill it with your target local network routing data:
-
-```env
-# Network Setup Configuration
-SERVER_IP=192.168.1.50
 SERVER_PORT=5001
-DEVICE_ID=linux_node_01
+OLLAMA_MODEL=llama3.2
+OLLAMA_URL=http://localhost:11434/api/generate
+OLLAMA_TIMEOUT=50          # keep below the client's RESPONSE_TIMEOUT
 ```
-*(On Windows, `SERVER_IP` is ignored as it binds locally to `0.0.0.0`, but `SERVER_PORT` must match your client allocation).*
 
-### Step 3: Launch the Windows Processing Daemon
-Open **PowerShell** or **Command Prompt** on Windows, navigate to your script workspace directory, and execute:
-```cmd
-python pc_server.py
+Wrist computer:
+
 ```
-*If prompted by Windows Defender Firewall, check the **Private networks** configuration block and click **Allow Access**.*
+SERVER_IP=192.168.1.50     # hub's IPv4 address (run ipconfig on Windows)
+SERVER_PORT=5001
+DEVICE_ID=linux-node-01
+INPUT_MODE=voice           # voice or text
+MIC_DEVICE=                # blank = default, or a number/name from the device list
+RESPONSE_TIMEOUT=60        # seconds to wait for Ollama
+```
 
-### Step 4: Launch the Linux Telemetry Stream
-Open a desktop terminal or SSH instance on your Linux system / Raspberry Pi, navigate to your script workspace directory, and execute:
+When running in Docker, leave out `VOSK_MODEL_PATH`; the image sets it. When running natively in voice mode, set it to the unzipped model folder.
+
+## Message protocol
+
+Every message is one JSON object followed by a newline (`\n`).
+
+Command (wrist → hub):
+```json
+{"device_id": "linux-node-01", "type": "voice_command", "text": "what is my oxygen level", "timestamp": "2026-10-16T20:57:14+00:00"}
+```
+
+Reply (hub → wrist): exactly **one** JSON object on **one** line per command. Ollama's output is merged with status fields:
+```json
+{"intent": "oxygen_status", "summary": "Oxygen is at 82 percent.", "data": {"o2_percent": 82}, "status": "SUCCESS", "device_id": "linux-node-01", "command": "what is my oxygen level"}
+```
+On failure (Ollama down, bad model output, invalid JSON) the hub still replies once, with `"status": "ERROR"` and an `"error"` message. The reply schema is set by `SYSTEM_PROMPT` in `pc_server.py`; edit it to match your telemetry fields.
+
+Shutdown (either direction):
+```json
+{"status": "SHUTDOWN", "device_id": "linux-node-01"}
+```
+
+Connections stay open for any number of commands. Each client runs in its own thread, so multiple wrist computers can connect at once.
+
+## Running
+
+### Hub (Windows)
+1. Start Ollama and make sure your model is pulled (e.g. `ollama pull llama3.2`).
+2. Allow inbound TCP 5001 in Windows Defender Firewall if prompted or blocked.
+3. Run `python pc_server.py`.
+
+### Wrist computer: natively
 ```bash
-python3 linux_client.py
+python3 -m pip install python-dotenv --break-system-packages   # or: sudo apt install python3-dotenv
+INPUT_MODE=text python3 voice_client.py
+```
+Text mode needs only `python-dotenv`. Voice mode also needs `vosk`, `sounddevice`, `libportaudio2`, and a Vosk model from alphacephei.com/vosk/models.
+
+### Wrist computer: Docker
+```bash
+docker compose build
+
+# Text mode (interactive)
+docker compose run --rm -e INPUT_MODE=text voice-client
+
+# Voice mode
+docker compose run --rm voice-client python -m sounddevice   # find your mic, set MIC_DEVICE
+docker compose up -d
+docker compose logs -f
+docker compose stop          # sends SHUTDOWN to the hub
 ```
 
----
+## Behavior
 
-## Network Failure Scenarios & Behavior
+| Event | What happens |
+|---|---|
+| Ctrl+C on the wrist computer | Sends `SHUTDOWN` to the hub, then exits |
+| `docker compose stop` | Same as Ctrl+C (`stop_signal: SIGINT`) |
+| Hub offline at startup | `[OFFLINE]` message, retries every 5 s |
+| Connection drops mid-command | `[ALERT]`, reconnects, resends the command once (`[RETRY]`) |
+| Hub stopped with Ctrl+C | Client's next command fails, client reconnects every 5 s until the hub is back |
+| Client disconnects (Ctrl+C or drop) | Hub prints an `[ALERT]` with the device ID; other clients are unaffected |
+| No reply within `RESPONSE_TIMEOUT` | Treated as a dropped connection |
 
-| Event Scenario | System Behavior |
-| :--- | :--- |
-| **Ctrl+C on Linux Client** | Linux pauses execution ➔ transmits `SHUTDOWN` block to Windows ➔ Windows terminal alerts `[ALERT] Linux Client was disconnected...` ➔ Linux closes cleanly. |
-| **Ctrl+C on Windows Server** | Windows drops out ➔ Linux catches connection refusal on next loop ➔ Linux alerts `[ALERT] Windows Server went offline!` ➔ Linux spins in standby checking for server. |
-| **Windows Server Restarts** | Linux standby scanner finds open port on host ➔ prints `[RECONNECTED] Windows Server is back online!` ➔ Telemetry cycle automatically resumes. |
+Log prefixes: `[CONNECTED]`, `[LISTENING]`, `[TEXT MODE]`, `[HEARD]`, `[HUB]`, `[OFFLINE]`, `[ALERT]`, `[RETRY]`, `[SHUTDOWN]`, `[EXIT]`.
+
+## Troubleshooting
+
+**`no configuration file provided: not found`:** run Docker commands from the folder containing `docker-compose.yml`, and check that downloads weren't renamed (e.g. `docker-compose.yml.txt`).
+
+**`dotenv` not found on Linux:** use `sudo apt install python3-dotenv` or add `--break-system-packages` to pip.
+
+**Every reply is `"status": "ERROR"` with "Ollama unreachable":** start Ollama on the hub and confirm the model in `OLLAMA_MODEL` is pulled (`ollama list`).
+
+**Hub ignores Ctrl+C on Windows:** fixed by the 1-second accept timeout; if you're on an older copy of `pc_server.py`, update it.
+
+**Voice mode hears nothing:**
+- In a VirtualBox VM: enable Audio Input in VM settings *and* under Devices → Audio while running; try the Windows DirectSound driver or ICH AC97 controller; confirm the Windows mic privacy setting and default input device.
+- Check the input in Ubuntu with `pavucontrol` (not muted, meter moves).
+- On a Linux desktop, route the container through PipeWire/PulseAudio (mount the pulse socket, set `MIC_DEVICE=pulse`) instead of `/dev/snd`.
+- Use `INPUT_MODE=text` to test the rest of the pipeline in the meantime.
+
+## Status
+
+- Socket link, reconnect, shutdown alerts, `.env` config, and Docker packaging: working.
+- Text mode end to end (wrist → hub → Ollama → wrist): working.
+- Ollama responses are not yet grounded in live TSS data.
+- Voice mode: mic input not yet reaching the Ubuntu VirtualBox test machine. Not expected to affect the Raspberry Pi target.
+- Planned: text-to-speech of a concise reply summary on the wrist computer; relaying responses to the HMD.

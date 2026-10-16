@@ -78,15 +78,19 @@ class HubLink:
             "text": text,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        try:
-            self._send(payload)
-            show_reply(self._recv_line())
-            return True
-        except OSError as e:  # reset, broken pipe, timeout
-            print(f"[ALERT] Lost connection to hub ({e}). '{text}' was not processed.")
-            self.close()
-            self.connect()
-            return False
+        for attempt in (1, 2):
+            try:
+                self._send(payload)
+                show_reply(self._recv_line())
+                return True
+            except OSError as e:  # reset, broken pipe, timeout
+                print(f"[ALERT] Lost connection to hub ({e}).")
+                self.close()
+                self.connect()
+                if attempt == 1:
+                    print(f"[RETRY] Resending '{text}'...")
+        print(f"[ALERT] '{text}' was not processed.")
+        return False
 
     def shutdown(self):
         if self.sock:

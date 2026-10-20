@@ -61,7 +61,7 @@ Reply (hub → wrist): exactly **one** JSON object on **one** line per command. 
 ```
 On failure (Ollama down, bad model output, invalid JSON) the hub still replies once, with `"status": "ERROR"` and an `"error"` message. The reply schema is set by `SYSTEM_PROMPT` in `pc_server.py`; edit it to match your telemetry fields.
 
-Shutdown (either direction):
+Shutdown (either direction; the client listens in the background, so it reacts instantly):
 ```json
 {"status": "SHUTDOWN", "device_id": "linux-node-01"}
 ```
@@ -103,8 +103,10 @@ docker compose stop          # sends SHUTDOWN to the hub
 | Ctrl+C on the wrist computer | Sends `SHUTDOWN` to the hub, then exits |
 | `docker compose stop` | Same as Ctrl+C (`stop_signal: SIGINT`) |
 | Hub offline at startup | `[OFFLINE]` message, retries every 5 s |
-| Connection drops mid-command | `[ALERT]`, reconnects, resends the command once (`[RETRY]`) |
-| Hub stopped with Ctrl+C | Client's next command fails, client reconnects every 5 s until the hub is back |
+| Connection drops mid-command | Reconnects and resends the command once (`[RETRY]`) |
+| Hub stopped with Ctrl+C | Hub sends `SHUTDOWN` to every client; client immediately shows `[ALERT] Hub was shut down` and reconnects every 5 s until the hub is back |
+| Hub crashes or network drops | Client immediately shows `[ALERT] Lost connection to hub` and reconnects |
+| Command sent while hub is offline | `[OFFLINE] ... was not sent` (not queued) |
 | Client disconnects (Ctrl+C or drop) | Hub prints an `[ALERT]` with the device ID; other clients are unaffected |
 | No reply within `RESPONSE_TIMEOUT` | Treated as a dropped connection |
 
@@ -117,6 +119,8 @@ Log prefixes: `[CONNECTED]`, `[LISTENING]`, `[TEXT MODE]`, `[HEARD]`, `[HUB]`, `
 **`dotenv` not found on Linux:** use `sudo apt install python3-dotenv` or add `--break-system-packages` to pip.
 
 **Every reply is `"status": "ERROR"` with "Ollama unreachable":** start Ollama on the hub and confirm the model in `OLLAMA_MODEL` is pulled (`ollama list`).
+
+**`.env` settings ignored on the hub (startup line shows the wrong model):** `pc_server.py` looks for `.env` next to itself, then one folder up, and prints which file it loaded. Check the file isn't secretly named `.env.txt` (`Get-ChildItem -Force`).
 
 **Hub ignores Ctrl+C on Windows:** fixed by the 1-second accept timeout; if you're on an older copy of `pc_server.py`, update it.
 

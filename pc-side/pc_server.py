@@ -21,9 +21,15 @@ import urllib.request
 
 from dotenv import load_dotenv
 
-# .env lives one folder up from this file
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(dotenv_path=os.path.join(parent_dir, ".env"))
+# Look for .env next to this file first, then one folder up
+_here = os.path.dirname(os.path.abspath(__file__))
+for _path in (os.path.join(_here, ".env"), os.path.join(os.path.dirname(_here), ".env")):
+    if os.path.isfile(_path):
+        load_dotenv(dotenv_path=_path)
+        print(f"[*] Loaded config from {_path}")
+        break
+else:
+    print("[!] No .env found next to pc_server.py or one folder up; using defaults")
 
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = int(os.getenv("SERVER_PORT", 5001))

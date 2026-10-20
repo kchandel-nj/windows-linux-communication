@@ -14,6 +14,7 @@ Each client gets its own thread, so several wrist computers can connect at once.
 
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -46,27 +47,47 @@ shutting_down = threading.Event()
 
 # Edit this to match your real telemetry schema.
 SYSTEM_PROMPT = """You are the onboard voice assistant for a lunar EVA suit system.
+Each request contains the current suit telemetry as JSON, followed by the crew member's request.
 Respond ONLY with a single JSON object, no markdown, no extra text, using exactly these keys:
   "intent":  short snake_case label for what the crew member asked (e.g. "oxygen_status")
   "summary": what will be read aloud to the crew member (rules below)
-  "data":    an object with any relevant telemetry fields and values
+  "data":    an object with the telemetry fields and values you used
 
-Rules for "summary":
-  - Telegraphic and brief: values and units only, no greetings, no filler, no follow-up questions.
-  - Ideally under 12 words.
-  - Example: asked for oxygen levels, say "Primary O2 47%, Secondary 99%."
-    Not: "Your primary oxygen tank level is currently at 47 percent..."
-  - If a value is unknown, say so briefly, e.g. "O2 data unavailable."
+Rules:
+  - Use ONLY values that appear in the provided telemetry. Never invent, estimate, or reuse example numbers.
+  - If the needed value is not in the telemetry, the summary must say it is unavailable, e.g. "O2 data unavailable."
+  - Summary style: telegraphic, values and units only, no greetings, no filler, no follow-up questions,
+    ideally under 12 words. Format example: "Primary O2 <value>%, Secondary <value>%."
+"""
 
-If you do not know a value, use null in "data". Never invent readings."""
+
+# ---------- Telemetry ----------
+def get_telemetry():
+    """Latest TSS telemetry as a dict.
+    Not connected to the TSS yet, so this returns {} and the assistant will
+    (correctly) report values as unavailable. Replace once the TSS client exists."""
+    return {}
+
+
+# ---------- Guardrail ----------
+# Numbers not glued to letters, so "O2" / "CO2" don't count as values
+_NUMBER = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
+
+
+def ungrounded_numbers(summary, telemetry):
+    """Numbers spoken in the summary that don't appear anywhere in the telemetry."""
+    spoken = set(_NUMBER.findall(summary or ""))
+    known = set(_NUMBER.findall(json.dumps(telemetry)))
+    return spoken - known
 
 
 # ---------- Ollama ----------
-def ask_ollama(text):
+def ask_ollama(text, telemetry):
+    prompt = f"Current telemetry (JSON): {json.dumps(telemetry)}\n\nCrew request: {text}"
     body = json.dumps({
         "model": OLLAMA_MODEL,
         "system": SYSTEM_PROMPT,
-        "prompt": text,
+        "prompt": prompt,
         "stream": False,
         "format": "json",          # Ollama forces valid JSON output
         "options": {"num_predict": 300},  # cap reply length so output can't run on forever
@@ -91,8 +112,9 @@ def handle_message(message):
     if message.get("type") == "voice_command":
         text = message.get("text", "")
         print(f"[COMMAND] {device_id}: {text}")
+        telemetry = get_telemetry()
         try:
-            result = ask_ollama(text)
+            result = ask_ollama(text, telemetry)
         except (TimeoutError, socket.timeout) as e:  # Ollama reachable but too slow
             print(f"[Error] Ollama took longer than {OLLAMA_TIMEOUT:.0f}s: {e}")
             return {"status": "ERROR", "device_id": device_id, "command": text,
@@ -105,6 +127,13 @@ def handle_message(message):
             print(f"[Error] Bad model output: {e}")
             return {"status": "ERROR", "device_id": device_id, "command": text,
                     "error": f"Bad model output: {e}"}
+        # Guardrail: never let the model speak a number that isn't in the telemetry
+        bad = ungrounded_numbers(str(result.get("summary", "")), telemetry)
+        if bad:
+            print(f"[GUARD] Blocked ungrounded value(s) {sorted(bad)} in: {result.get('summary')!r}")
+            result["summary"] = "Data unavailable."
+            result["guardrail"] = "ungrounded_values_blocked"
+
         reply = {**result, "status": "SUCCESS", "device_id": device_id, "command": text}
         print(f"[REPLY] {reply}\n")
         return reply

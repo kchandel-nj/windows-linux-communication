@@ -33,6 +33,7 @@ class Speaker:
         self._busy = threading.Event()
         self._quiet_until = 0.0
         self._voice = None
+        self._warned_aplay = False
         self.engine = self._init_engine(TTS_ENGINE)
         print(f"[TTS] Engine: {self.engine}")
 
@@ -84,19 +85,29 @@ class Speaker:
                 self._busy.clear()
 
     def _say_piper(self, text):
-        import sounddevice as sd
-        stream = None
+        chunks = list(self._voice.synthesize(text))
+        if not chunks:
+            return
+        rate = chunks[0].sample_rate
+        audio = b"".join(c.audio_int16_bytes for c in chunks)
         try:
-            for chunk in self._voice.synthesize(text):
-                if stream is None:  # open once we know the voice's sample rate
-                    stream = sd.RawOutputStream(samplerate=chunk.sample_rate, channels=1,
-                                                dtype="int16", device=SPEAKER_DEVICE)
-                    stream.start()
-                stream.write(chunk.audio_int16_bytes)
-        finally:
-            if stream is not None:
-                stream.stop()   # waits for buffered audio to finish playing
-                stream.close()
+            self._play_sounddevice(audio, rate)
+        except Exception as e:
+            # PortAudio sometimes finds no default output (e.g. "Error querying
+            # device -1"); aplay goes through ALSA's default, which PipeWire handles
+            if not shutil.which("aplay"):
+                raise
+            if not self._warned_aplay:
+                print(f"[TTS] sounddevice output failed ({e}); using aplay instead.")
+                self._warned_aplay = True
+            subprocess.run(["aplay", "-q", "-r", str(rate), "-f", "S16_LE", "-c", "1", "-t", "raw"],
+                           input=audio, check=True)
+
+    def _play_sounddevice(self, audio, rate):
+        import sounddevice as sd
+        with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
+                                device=SPEAKER_DEVICE) as stream:
+            stream.write(audio)
 
 
 def spoken_text(reply):

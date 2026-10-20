@@ -22,6 +22,7 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 | `run.sh` | Wrist computer | Presets for the input/output modes |
 | `setup.sh` | Wrist computer | One-time setup: packages, venv, Vosk model, Piper voice, starter `.env` |
 | `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
+| `setup.bat`, `run.bat` | Hub | One-time Windows setup; start the hub |
 | `.env` | Both | IPs, port, device ID, and client settings |
 | `requirements.txt` | Wrist computer | Python packages (used by Docker and manual installs) |
 | `docker/` | Wrist computer | `Dockerfile`, `docker-compose.yml`, `Dockerfile.dockerignore`; containerized client with models included |
@@ -95,9 +96,9 @@ Input and output are chosen independently. Replies are always printed; `speech` 
 ## Running
 
 ### Hub (Windows)
-1. Start Ollama and make sure your model is pulled (e.g. `ollama pull llama3.2`).
-2. Allow inbound TCP 5001 in Windows Defender Firewall if prompted or blocked.
-3. Run `python pc_server.py`.
+**First time:** double-click `setup.bat` in the hub folder (safe to rerun). It installs Python and Ollama with winget if they're missing, installs `requirements.txt`, creates a starter `.env`, pulls the model named in `OLLAMA_MODEL`, and adds a firewall rule for `SERVER_PORT` (asks for admin permission once). At the end it lists the PC's IPv4 addresses to use as `SERVER_IP` on the wrist computer. If it just installed Python, close the window and run it again.
+
+**Running:** double-click `run.bat`, or run `python pc_server.py`. Ollama must be running (tray icon); check `ollama ps` for `100% GPU`.
 
 ### Wrist computer: natively
 

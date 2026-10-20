@@ -17,7 +17,8 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 
 | File | Where it runs | Purpose |
 |---|---|---|
-| `voice_client.py` | Wrist computer | Captures commands (voice or text), sends them to the hub, prints replies |
+| `voice_client.py` | Wrist computer | Captures commands (voice or text), sends them to the hub, prints and speaks replies |
+| `tts.py` | Wrist computer | Offline text-to-speech (Piper, espeak-ng fallback) |
 | `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
 | `.env` | Both | IPs, port, device ID, and client settings |
 | `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `.dockerignore` | Wrist computer | Containerized client, Vosk model included |
@@ -42,9 +43,12 @@ DEVICE_ID=linux-node-01
 INPUT_MODE=voice           # voice or text
 MIC_DEVICE=                # blank = default, or a number/name from the device list
 RESPONSE_TIMEOUT=60        # seconds to wait for Ollama
+TTS_ENGINE=piper           # piper, espeak, or none
+PIPER_VOICE=en_US-lessac-medium.onnx   # Piper voice file (.onnx.json must sit beside it)
+SPEAKER_DEVICE=            # blank = default output, or a number/name from the device list
 ```
 
-When running in Docker, leave out `VOSK_MODEL_PATH`; the image sets it. When running natively in voice mode, set it to the unzipped model folder.
+When running in Docker, leave out `VOSK_MODEL_PATH` and `PIPER_VOICE`; the image sets both. When running natively in voice mode, set it to the unzipped model folder.
 
 ## Message protocol
 
@@ -80,7 +84,7 @@ Connections stay open for any number of commands. Each client runs in its own th
 python3 -m pip install python-dotenv --break-system-packages   # or: sudo apt install python3-dotenv
 INPUT_MODE=text python3 voice_client.py
 ```
-Text mode needs only `python-dotenv`. Voice mode also needs `vosk`, `sounddevice`, `libportaudio2`, and a Vosk model from alphacephei.com/vosk/models.
+Text mode needs only `python-dotenv` (plus `piper-tts` and `sounddevice` if you want speech). Voice mode also needs `vosk`, `sounddevice`, `libportaudio2`, and a Vosk model from alphacephei.com/vosk/models.
 
 ### Wrist computer: Docker
 ```bash
@@ -95,6 +99,23 @@ docker compose up -d
 docker compose logs -f
 docker compose stop          # sends SHUTDOWN to the hub
 ```
+
+## Text-to-speech
+
+The wrist computer reads each reply's `summary` aloud; errors are spoken as "Assistant unavailable." It also says "Hub offline." / "Hub online." when the connection changes. The hub's system prompt keeps summaries telegraphic, per the NASA guidance ("Primary O2 47%, Secondary 99%.").
+
+While speaking (plus 0.6 s afterward) the mic is ignored, so the assistant never transcribes its own voice.
+
+If Piper fails to load it falls back to espeak-ng, then to text only; the `[TTS] Engine:` line at startup shows which is active.
+
+Native setup:
+```bash
+python3 -m pip install piper-tts --break-system-packages
+sudo apt install espeak-ng          # optional fallback
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+Other voices: browse the rhasspy/piper-voices repository on Hugging Face and download both the `.onnx` and `.onnx.json` files.
 
 ## Behavior
 
@@ -136,4 +157,5 @@ Log prefixes: `[CONNECTED]`, `[LISTENING]`, `[TEXT MODE]`, `[HEARD]`, `[HUB]`, `
 - Text mode end to end (wrist → hub → Ollama → wrist): working.
 - Ollama responses are not yet grounded in live TSS data.
 - Voice mode: mic input not yet reaching the Ubuntu VirtualBox test machine. Not expected to affect the Raspberry Pi target.
-- Planned: text-to-speech of a concise reply summary on the wrist computer; relaying responses to the HMD.
+- Text-to-speech of reply summaries: implemented; to be tested on the target audio hardware.
+- Planned: relaying responses to the HMD.

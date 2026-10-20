@@ -45,12 +45,20 @@ clients_lock = threading.Lock()
 shutting_down = threading.Event()
 
 # Edit this to match your real telemetry schema.
-SYSTEM_PROMPT = """You are the onboard assistant for a lunar EVA suit system.
+SYSTEM_PROMPT = """You are the onboard voice assistant for a lunar EVA suit system.
 Respond ONLY with a single JSON object, no markdown, no extra text, using exactly these keys:
   "intent":  short snake_case label for what the crew member asked (e.g. "oxygen_status")
-  "summary": one short sentence to be read aloud to the crew member
+  "summary": what will be read aloud to the crew member (rules below)
   "data":    an object with any relevant telemetry fields and values
-If you do not know a value, use null. Never invent readings."""
+
+Rules for "summary":
+  - Telegraphic and brief: values and units only, no greetings, no filler, no follow-up questions.
+  - Ideally under 12 words.
+  - Example: asked for oxygen levels, say "Primary O2 47%, Secondary 99%."
+    Not: "Your primary oxygen tank level is currently at 47 percent..."
+  - If a value is unknown, say so briefly, e.g. "O2 data unavailable."
+
+If you do not know a value, use null in "data". Never invent readings."""
 
 
 # ---------- Ollama ----------

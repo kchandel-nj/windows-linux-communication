@@ -8,6 +8,8 @@ Two input modes, chosen with INPUT_MODE in .env (or on the command line):
   voice  (default) - microphone -> Vosk offline speech-to-text
   text             - type commands at a prompt (for testing without a mic)
 
+Replies are read aloud with offline text-to-speech (see tts.py).
+
 Connection behavior:
   - a background thread listens to the hub at all times, so a hub shutdown
     (Ctrl+C on the PC) is announced immediately, not on the next command
@@ -29,6 +31,8 @@ from dotenv import load_dotenv, find_dotenv
 # ---------- Config ----------
 load_dotenv(find_dotenv())
 
+from tts import Speaker, spoken_text  # after load_dotenv so it sees TTS settings
+
 SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "5001"))
 DEVICE_ID = os.getenv("DEVICE_ID", "linux-node-01")
@@ -47,8 +51,10 @@ class HubLink:
     replies go into a queue for send_command(); SHUTDOWN or a dropped link
     triggers an alert and an automatic reconnect."""
 
-    def __init__(self):
+    def __init__(self, speaker):
+        self.speaker = speaker
         self.sock = None
+        self.ever_dropped = False
         self.replies = queue.Queue()
         self.connected = threading.Event()
         self.send_lock = threading.Lock()
@@ -71,6 +77,8 @@ class HubLink:
             self._drain_replies()
             self.connected.set()
             print(f"[CONNECTED] Hub at {SERVER_IP}:{SERVER_PORT}")
+            if self.ever_dropped:
+                self.speaker.say("Hub online.")
             threading.Thread(target=self._reader, args=(sock,), daemon=True).start()
             return
 
@@ -116,10 +124,12 @@ class HubLink:
             pass
         self.replies.put(None)  # wake any command waiting for a reply
 
+        self.ever_dropped = True
         if hub_shutdown:
             print("\n[ALERT] Hub was shut down (Ctrl+C on the PC). Waiting for it to come back...")
         else:
             print("\n[ALERT] Lost connection to hub. Reconnecting...")
+        self.speaker.say("Hub offline.")
         self._connect_blocking()  # starts a fresh reader thread when back online
 
     def _force_reconnect(self):
@@ -168,6 +178,7 @@ class HubLink:
                     print(f"[RETRY] Resending '{text}' once the hub is back...")
                 continue
             show_reply(reply)
+            self.speaker.say(spoken_text(reply))
             return True
 
         print(f"[ALERT] '{text}' was not processed.")
@@ -227,9 +238,13 @@ def run_voice_mode(link):
     rec = KaldiRecognizer(model, samplerate)
     audio_q = queue.Queue()
 
+    speaker = link.speaker
+
     def audio_callback(indata, frames, time_info, status):
         if status:
             print(f"[AUDIO] {status}", file=sys.stderr)
+        if speaker.is_active():
+            return  # don't transcribe our own voice
         audio_q.put(bytes(indata))
 
     link.start()
@@ -246,10 +261,10 @@ def run_voice_mode(link):
                 continue
 
             print(f"[HEARD] {text}")
-            if not link.send_command(text):
-                with audio_q.mutex:          # drop speech captured while offline
-                    audio_q.queue.clear()
-                rec.Reset()
+            link.send_command(text)
+            with audio_q.mutex:   # drop anything captured while waiting / speaking
+                audio_q.queue.clear()
+            rec.Reset()
 
 
 # ---------- Main ----------
@@ -259,7 +274,7 @@ def main():
         print(f"[ERROR] INPUT_MODE must be 'voice' or 'text', got '{INPUT_MODE}'.")
         sys.exit(1)
 
-    link = HubLink()
+    link = HubLink(Speaker())
     try:
         modes[INPUT_MODE](link)
     except KeyboardInterrupt:

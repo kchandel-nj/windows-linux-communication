@@ -49,11 +49,12 @@ OUTPUT_MODE=speech         # text or speech (default when no -o flag)
 MIC_DEVICE=                # blank = default, or a number/name from the device list
 RESPONSE_TIMEOUT=60        # seconds to wait for Ollama
 TTS_ENGINE=piper           # piper, espeak, or none
-PIPER_VOICE=voices/en_US-lessac-medium.onnx   # relative to the code folder; .onnx.json must sit beside it
 SPEAKER_DEVICE=            # blank = default output, or a number/name from the device list
+VOSK_MODEL_PATH=vosk-model-small-en-us-0.15   # unzipped Vosk model folder (voice input)
+PIPER_VOICE=voices/en_US-lessac-medium.onnx   # Piper voice; its .onnx.json must sit beside it
 ```
 
-When running in Docker, leave out `VOSK_MODEL_PATH` and `PIPER_VOICE`; the image sets both. When running natively in voice mode, set it to the unzipped model folder.
+Keep `VOSK_MODEL_PATH` and `PIPER_VOICE` as the relative paths shown: they're relative to `linux-side/`, and the Docker image puts the model and voice at the same relative locations, so one `.env` works both natively and in Docker. Only change them if you use a different model or voice (and download it to match).
 
 ## Message protocol
 

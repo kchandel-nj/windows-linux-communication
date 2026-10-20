@@ -45,6 +45,8 @@ SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "5001"))
 DEVICE_ID = os.getenv("DEVICE_ID", "linux-node-01")
 MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "vosk-model-small-en-us-0.15")
+if not os.path.isabs(MODEL_PATH):  # relative paths are relative to this folder
+    MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), MODEL_PATH)
 RESPONSE_TIMEOUT = float(os.getenv("RESPONSE_TIMEOUT", "60"))  # Ollama can be slow
 RETRY_DELAY = 5
 

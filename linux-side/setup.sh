@@ -98,7 +98,7 @@ TTS_ENGINE=piper
 EOF
     ok "created .env; set SERVER_IP to the hub's address"
 fi
-grep -q '^VOSK_MODEL_PATH=' .env || echo "VOSK_MODEL_PATH=$PROJECT_DIR/$VOSK_MODEL" >> .env
+grep -q '^VOSK_MODEL_PATH=' .env || echo "VOSK_MODEL_PATH=$VOSK_MODEL" >> .env
 grep -q '^PIPER_VOICE='     .env || echo "PIPER_VOICE=voices/$PIPER_VOICE.onnx" >> .env
 
 # Keep the big model files out of git

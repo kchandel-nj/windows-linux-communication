@@ -8,10 +8,11 @@ Two input modes, chosen with INPUT_MODE in .env (or on the command line):
   voice  (default) - microphone -> Vosk offline speech-to-text
   text             - type commands at a prompt (for testing without a mic)
 
-Kept from before:
-  - .env config (SERVER_IP, SERVER_PORT, DEVICE_ID, ...)
-  - auto-reconnect with 5 s back-off if the hub goes offline
-  - Ctrl+C sends {"status": "SHUTDOWN"} so the hub knows we left
+Connection behavior:
+  - a background thread listens to the hub at all times, so a hub shutdown
+    (Ctrl+C on the PC) is announced immediately, not on the next command
+  - auto-reconnect every 5 s whenever the hub is offline
+  - Ctrl+C here sends {"status": "SHUTDOWN"} so the hub knows we left
 """
 
 import json
@@ -19,6 +20,7 @@ import os
 import queue
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -41,37 +43,100 @@ MIC_DEVICE = int(_mic) if _mic.isdigit() else (_mic or None)  # index, name, or 
 
 # ---------- Connection to the hub ----------
 class HubLink:
+    """Owns the socket. A reader thread receives everything the hub sends:
+    replies go into a queue for send_command(); SHUTDOWN or a dropped link
+    triggers an alert and an automatic reconnect."""
+
     def __init__(self):
         self.sock = None
-        self.buffer = b""
+        self.replies = queue.Queue()
+        self.connected = threading.Event()
+        self.send_lock = threading.Lock()
+        self.closing = False
 
-    def connect(self):
-        """Block until the hub accepts a connection."""
-        while True:
+    # --- connecting ---
+    def start(self):
+        self._connect_blocking()
+
+    def _connect_blocking(self):
+        while not self.closing:
             try:
-                self.sock = socket.create_connection((SERVER_IP, SERVER_PORT), timeout=5)
-                self.sock.settimeout(RESPONSE_TIMEOUT)
-                self.buffer = b""
-                print(f"[CONNECTED] Hub at {SERVER_IP}:{SERVER_PORT}")
-                return
+                sock = socket.create_connection((SERVER_IP, SERVER_PORT), timeout=5)
             except OSError as e:
                 print(f"[OFFLINE] Can't reach hub ({e}). Retrying in {RETRY_DELAY}s...")
                 time.sleep(RETRY_DELAY)
+                continue
+            sock.settimeout(None)
+            self.sock = sock
+            self._drain_replies()
+            self.connected.set()
+            print(f"[CONNECTED] Hub at {SERVER_IP}:{SERVER_PORT}")
+            threading.Thread(target=self._reader, args=(sock,), daemon=True).start()
+            return
 
+    def _drain_replies(self):
+        while True:
+            try:
+                self.replies.get_nowait()
+            except queue.Empty:
+                return
+
+    # --- background listener ---
+    def _reader(self, sock):
+        buffer = b""
+        hub_shutdown = False
+        try:
+            while not hub_shutdown:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, _, buffer = buffer.partition(b"\n")
+                    if not line.strip():
+                        continue
+                    try:
+                        msg = json.loads(line.decode("utf-8"))
+                    except json.JSONDecodeError:
+                        self.replies.put({"_raw": line.decode("utf-8", errors="replace")})
+                        continue
+                    if msg.get("status") == "SHUTDOWN":
+                        hub_shutdown = True
+                        break
+                    self.replies.put(msg)
+        except OSError:
+            pass
+
+        if self.closing:
+            return
+        self.connected.clear()
+        try:
+            sock.close()
+        except OSError:
+            pass
+        self.replies.put(None)  # wake any command waiting for a reply
+
+        if hub_shutdown:
+            print("\n[ALERT] Hub was shut down (Ctrl+C on the PC). Waiting for it to come back...")
+        else:
+            print("\n[ALERT] Lost connection to hub. Reconnecting...")
+        self._connect_blocking()  # starts a fresh reader thread when back online
+
+    def _force_reconnect(self):
+        """Kick the reader so it notices the link is bad and reconnects."""
+        self.connected.clear()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    # --- sending ---
     def _send(self, payload):
-        self.sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-
-    def _recv_line(self):
-        while b"\n" not in self.buffer:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ConnectionResetError("Hub closed the connection")
-            self.buffer += chunk
-        line, _, self.buffer = self.buffer.partition(b"\n")
-        return line.decode("utf-8")
+        with self.send_lock:
+            self.sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
 
     def send_command(self, text):
-        """Send one command and print the reply. Returns False if the link dropped."""
+        """Send one command and print the reply. Returns False if it wasn't processed."""
         payload = {
             "device_id": DEVICE_ID,
             "type": "voice_command",
@@ -79,47 +144,63 @@ class HubLink:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         for attempt in (1, 2):
+            # first attempt: fail fast if offline; retry: give the reconnect a moment
+            wait = 0 if attempt == 1 else RETRY_DELAY + 2
+            if not self.connected.wait(timeout=wait):
+                print(f"[OFFLINE] Hub is offline. '{text}' was not sent.")
+                return False
             try:
                 self._send(payload)
-                show_reply(self._recv_line())
-                return True
-            except OSError as e:  # reset, broken pipe, timeout
-                print(f"[ALERT] Lost connection to hub ({e}).")
-                self.close()
-                self.connect()
+            except OSError:
+                self._force_reconnect()
+                print(f"[RETRY] Send failed, retrying '{text}'...")
+                continue
+
+            try:
+                reply = self.replies.get(timeout=RESPONSE_TIMEOUT)
+            except queue.Empty:
+                print(f"[ALERT] No reply within {RESPONSE_TIMEOUT:.0f}s.")
+                self._force_reconnect()
+                continue
+
+            if reply is None:  # link dropped while waiting
                 if attempt == 1:
-                    print(f"[RETRY] Resending '{text}'...")
+                    print(f"[RETRY] Resending '{text}' once the hub is back...")
+                continue
+            show_reply(reply)
+            return True
+
         print(f"[ALERT] '{text}' was not processed.")
         return False
 
+    # --- leaving ---
     def shutdown(self):
-        if self.sock:
+        self.closing = True
+        if self.connected.is_set():
             try:
                 self._send({"status": "SHUTDOWN", "device_id": DEVICE_ID})
             except OSError:
                 pass
 
     def close(self):
+        self.closing = True
         if self.sock:
-            self.sock.close()
-            self.sock = None
+            try:
+                self.sock.close()
+            except OSError:
+                pass
 
 
 def show_reply(reply):
-    try:
-        data = json.loads(reply)
-    except json.JSONDecodeError:
-        print(f"[HUB] (non-JSON) {reply}")
-        return
-    if data.get("status") == "SHUTDOWN":
-        print("[ALERT] Hub announced it is shutting down.")
+    if "_raw" in reply:
+        print(f"[HUB] (non-JSON) {reply['_raw']}")
     else:
-        print("[HUB] " + json.dumps(data, indent=2))
+        print("[HUB] " + json.dumps(reply, indent=2))
 
 
 # ---------- Text mode ----------
 def run_text_mode(link):
-    link.connect()
+    link.start()
     print("[TEXT MODE] Type a command and press Enter (Ctrl+C to quit)")
     while True:
         try:
@@ -151,7 +232,7 @@ def run_voice_mode(link):
             print(f"[AUDIO] {status}", file=sys.stderr)
         audio_q.put(bytes(indata))
 
-    link.connect()
+    link.start()
     with sd.RawInputStream(samplerate=samplerate, blocksize=8000, device=MIC_DEVICE,
                            dtype="int16", channels=1, callback=audio_callback):
         print("[LISTENING] Speak a command (Ctrl+C to quit)")
@@ -169,7 +250,6 @@ def run_voice_mode(link):
                 with audio_q.mutex:          # drop speech captured while offline
                     audio_q.queue.clear()
                 rec.Reset()
-                print("[LISTENING] Back online. Speak a command.")
 
 
 # ---------- Main ----------

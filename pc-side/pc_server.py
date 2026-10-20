@@ -6,6 +6,7 @@ any number of newline-delimited JSON commands, one reply per command.
 
   {"type": "voice_command", "text": ...}  -> sent to local Ollama, JSON reply returned
   {"status": "SHUTDOWN"}                  -> client is leaving; connection closed
+On Ctrl+C the hub sends {"status": "SHUTDOWN"} to every connected client.
   anything else                           -> legacy sensor_reading processing
 
 Each client gets its own thread, so several wrist computers can connect at once.
@@ -37,6 +38,11 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", 50))  # keep below the client's RESPONSE_TIMEOUT
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "-1")  # -1 = keep model loaded in VRAM
+
+# Connected clients, so the hub can notify them all when it shuts down
+clients = set()
+clients_lock = threading.Lock()
+shutting_down = threading.Event()
 
 # Edit this to match your real telemetry schema.
 SYSTEM_PROMPT = """You are the onboard assistant for a lunar EVA suit system.
@@ -116,6 +122,8 @@ def handle_client(client_socket, client_address):
     device_id = "unknown"
     buffer = b""
     print(f"[+] Client connected from {ip}")
+    with clients_lock:
+        clients.add(client_socket)
 
     try:
         while True:
@@ -144,9 +152,26 @@ def handle_client(client_socket, client_address):
             send_json(client_socket, handle_message(message))
 
     except OSError as e:  # reset, aborted, broken pipe
-        print(f"[ALERT] Client {device_id} ({ip}) dropped unexpectedly: {e}")
+        if not shutting_down.is_set():
+            print(f"[ALERT] Client {device_id} ({ip}) dropped unexpectedly: {e}")
     finally:
+        with clients_lock:
+            clients.discard(client_socket)
         client_socket.close()
+
+
+def notify_clients_of_shutdown():
+    shutting_down.set()
+    with clients_lock:
+        targets = list(clients)
+    for sock in targets:
+        try:
+            send_json(sock, {"status": "SHUTDOWN", "source": "hub"})
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    if targets:
+        print(f"[*] Notified {len(targets)} client(s) of shutdown.")
 
 
 # ---------- Main ----------
@@ -171,6 +196,7 @@ def main():
                              daemon=True).start()
     except KeyboardInterrupt:
         print("\n[*] Hub detected Ctrl+C! Shutting down...")
+        notify_clients_of_shutdown()
     finally:
         server_socket.close()
         sys.exit(0)

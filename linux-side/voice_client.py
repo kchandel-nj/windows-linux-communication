@@ -4,11 +4,18 @@ voice_client.py  (wrist computer / Linux side)
 Sends crew commands to the Windows hub as newline-delimited JSON and prints
 the hub's JSON reply (Ollama telemetry).
 
-Two input modes, chosen with INPUT_MODE in .env (or on the command line):
-  voice  (default) - microphone -> Vosk offline speech-to-text
-  text             - type commands at a prompt (for testing without a mic)
+Input and output are chosen independently, on the command line or in .env:
 
-Replies are read aloud with offline text-to-speech (see tts.py).
+  -i / --input   text | voice | both     (INPUT_MODE,  default voice)
+  -o / --output  text | speech           (OUTPUT_MODE, default speech)
+
+  text in,  text out:     python voice_client.py -i text -o text
+  mic in,   text out:     python voice_client.py -i voice -o text
+  text in,  speech out:   python voice_client.py -i text -o speech
+  mic in,   speech out:   python voice_client.py -i voice -o speech
+  mic + keyboard:         python voice_client.py -i both
+
+Replies are always printed; "speech" also reads them aloud (see tts.py).
 
 Connection behavior:
   - a background thread listens to the hub at all times, so a hub shutdown
@@ -17,6 +24,7 @@ Connection behavior:
   - Ctrl+C here sends {"status": "SHUTDOWN"} so the hub knows we left
 """
 
+import argparse
 import json
 import os
 import queue
@@ -36,7 +44,6 @@ from tts import Speaker, spoken_text  # after load_dotenv so it sees TTS setting
 SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "5001"))
 DEVICE_ID = os.getenv("DEVICE_ID", "linux-node-01")
-INPUT_MODE = os.getenv("INPUT_MODE", "voice").strip().lower()
 MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "vosk-model-small-en-us-0.15")
 RESPONSE_TIMEOUT = float(os.getenv("RESPONSE_TIMEOUT", "60"))  # Ollama can be slow
 RETRY_DELAY = 5
@@ -58,6 +65,7 @@ class HubLink:
         self.replies = queue.Queue()
         self.connected = threading.Event()
         self.send_lock = threading.Lock()
+        self.command_lock = threading.Lock()  # one command in flight (mic + keyboard)
         self.closing = False
 
     # --- connecting ---
@@ -147,6 +155,10 @@ class HubLink:
 
     def send_command(self, text):
         """Send one command and print the reply. Returns False if it wasn't processed."""
+        with self.command_lock:
+            return self._send_command(text)
+
+    def _send_command(self, text):
         payload = {
             "device_id": DEVICE_ID,
             "type": "voice_command",
@@ -209,10 +221,9 @@ def show_reply(reply):
         print("[HUB] " + json.dumps(reply, indent=2))
 
 
-# ---------- Text mode ----------
-def run_text_mode(link):
-    link.start()
-    print("[TEXT MODE] Type a command and press Enter (Ctrl+C to quit)")
+# ---------- Text input ----------
+def text_loop(link):
+    print("[TEXT] Type a command and press Enter (Ctrl+C to quit)")
     while True:
         try:
             text = input("> ").strip()
@@ -222,61 +233,97 @@ def run_text_mode(link):
             link.send_command(text)
 
 
-# ---------- Voice mode ----------
-def run_voice_mode(link):
-    # Imported here so text mode works even without audio libraries installed
-    import sounddevice as sd
-    from vosk import Model, KaldiRecognizer, SetLogLevel
+# ---------- Voice input ----------
+class VoiceInput:
+    """Microphone -> Vosk speech-to-text. Loads the model up front so problems show immediately."""
 
-    SetLogLevel(-1)
-    if not os.path.isdir(MODEL_PATH):
-        print(f"[ERROR] Vosk model not found at '{MODEL_PATH}'. Set VOSK_MODEL_PATH in .env.")
-        sys.exit(1)
+    def __init__(self, speaker):
+        # Imported here so text-only runs work without audio libraries installed
+        import sounddevice as sd
+        from vosk import Model, KaldiRecognizer, SetLogLevel
 
-    model = Model(MODEL_PATH)
-    samplerate = int(sd.query_devices(MIC_DEVICE, "input")["default_samplerate"])
-    rec = KaldiRecognizer(model, samplerate)
-    audio_q = queue.Queue()
+        SetLogLevel(-1)
+        if not os.path.isdir(MODEL_PATH):
+            print(f"[ERROR] Vosk model not found at '{MODEL_PATH}'. Set VOSK_MODEL_PATH in .env.")
+            sys.exit(1)
 
-    speaker = link.speaker
+        self.sd = sd
+        self.speaker = speaker
+        self.samplerate = int(sd.query_devices(MIC_DEVICE, "input")["default_samplerate"])
+        self.rec = KaldiRecognizer(Model(MODEL_PATH), self.samplerate)
+        self.audio_q = queue.Queue()
 
-    def audio_callback(indata, frames, time_info, status):
+    def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"[AUDIO] {status}", file=sys.stderr)
-        if speaker.is_active():
+        if self.speaker.is_active():
             return  # don't transcribe our own voice
-        audio_q.put(bytes(indata))
+        self.audio_q.put(bytes(indata))
 
-    link.start()
-    with sd.RawInputStream(samplerate=samplerate, blocksize=8000, device=MIC_DEVICE,
-                           dtype="int16", channels=1, callback=audio_callback):
-        print("[LISTENING] Speak a command (Ctrl+C to quit)")
-        while True:
-            data = audio_q.get()
-            if not rec.AcceptWaveform(data):
-                continue  # phrase not finished yet
+    def run(self, link):
+        with self.sd.RawInputStream(samplerate=self.samplerate, blocksize=8000, device=MIC_DEVICE,
+                                    dtype="int16", channels=1, callback=self._callback):
+            print("[LISTENING] Speak a command")
+            while True:
+                data = self.audio_q.get()
+                if not self.rec.AcceptWaveform(data):
+                    continue  # phrase not finished yet
 
-            text = json.loads(rec.Result()).get("text", "").strip()
-            if not text:
-                continue
+                text = json.loads(self.rec.Result()).get("text", "").strip()
+                if not text:
+                    continue
 
-            print(f"[HEARD] {text}")
-            link.send_command(text)
-            with audio_q.mutex:   # drop anything captured while waiting / speaking
-                audio_q.queue.clear()
-            rec.Reset()
+                print(f"[HEARD] {text}")
+                link.send_command(text)
+                with self.audio_q.mutex:   # drop anything captured while waiting / speaking
+                    self.audio_q.queue.clear()
+                self.rec.Reset()
+
+    def run_safely(self, link):
+        """For 'both' mode: a mic failure shouldn't take down text input."""
+        try:
+            self.run(link)
+        except Exception as e:
+            print(f"\n[ERROR] Voice input stopped ({e}). Text input still works.")
 
 
 # ---------- Main ----------
-def main():
-    modes = {"voice": run_voice_mode, "text": run_text_mode}
-    if INPUT_MODE not in modes:
-        print(f"[ERROR] INPUT_MODE must be 'voice' or 'text', got '{INPUT_MODE}'.")
-        sys.exit(1)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="SIRIUS wrist computer client",
+        epilog="Examples:  -i text -o text   |   -i voice -o text   |   -i both -o speech")
+    parser.add_argument("-i", "--input", choices=["text", "voice", "both"],
+                        default=os.getenv("INPUT_MODE", "voice").strip().lower(),
+                        help="how commands are given (default: INPUT_MODE in .env, else voice)")
+    parser.add_argument("-o", "--output", choices=["text", "speech"],
+                        default=os.getenv("OUTPUT_MODE", "speech").strip().lower(),
+                        help="how replies are given; text always prints (default: OUTPUT_MODE in .env, else speech)")
+    args = parser.parse_args()
+    # defaults from .env aren't checked by argparse, so check them here
+    if args.input not in ("text", "voice", "both"):
+        parser.error(f"INPUT_MODE must be text, voice, or both (got '{args.input}')")
+    if args.output not in ("text", "speech"):
+        parser.error(f"OUTPUT_MODE must be text or speech (got '{args.output}')")
+    return args
 
-    link = HubLink(Speaker())
+
+def main():
+    args = parse_args()
+    print(f"[MODE] input: {args.input}  |  output: {args.output}")
+
+    speaker = Speaker(quiet=True) if args.output == "text" else Speaker()
+    voice = VoiceInput(speaker) if args.input in ("voice", "both") else None
+
+    link = HubLink(speaker)
     try:
-        modes[INPUT_MODE](link)
+        link.start()
+        if args.input == "text":
+            text_loop(link)
+        elif args.input == "voice":
+            voice.run(link)
+        else:  # both: mic in the background, keyboard in front
+            threading.Thread(target=voice.run_safely, args=(link,), daemon=True).start()
+            text_loop(link)
     except KeyboardInterrupt:
         print("\n[SHUTDOWN] Ctrl+C detected, notifying hub...")
         link.shutdown()

@@ -31,15 +31,20 @@ MIC_QUIET_TAIL = 0.6
 
 
 class Speaker:
-    def __init__(self, engine=None):
-        """engine overrides TTS_ENGINE from .env (e.g. "none" for text-only output)."""
+    def __init__(self, engine=None, quiet=False):
+        """engine overrides TTS_ENGINE from .env.
+        quiet=True (text-only output mode): no speech and no [TTS]/[SAY] lines."""
+        self.quiet = quiet
         self._lock = threading.Lock()   # one utterance at a time
         self._busy = threading.Event()
         self._quiet_until = 0.0
         self._voice = None
         self._warned_aplay = False
-        self.engine = self._init_engine((engine or TTS_ENGINE).strip().lower())
-        print(f"[TTS] Engine: {self.engine}")
+        if quiet:
+            self.engine = "none"
+        else:
+            self.engine = self._init_engine((engine or TTS_ENGINE).strip().lower())
+            print(f"[TTS] Engine: {self.engine}")
 
     # ---------- setup ----------
     def _init_engine(self, engine):
@@ -68,7 +73,7 @@ class Speaker:
     def say(self, text):
         """Speak text and block until done. Never raises."""
         text = (text or "").strip()
-        if not text:
+        if not text or self.quiet:
             return
         print(f"[SAY] {text}")
         if self.engine == "none":

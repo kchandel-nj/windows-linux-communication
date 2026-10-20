@@ -132,6 +132,7 @@ def handle_message(message):
         if bad:
             print(f"[GUARD] Blocked ungrounded value(s) {sorted(bad)} in: {result.get('summary')!r}")
             result["summary"] = "Data unavailable."
+            result["data"] = {}  # the data came from the same made-up answer
             result["guardrail"] = "ungrounded_values_blocked"
 
         reply = {**result, "status": "SUCCESS", "device_id": device_id, "command": text}

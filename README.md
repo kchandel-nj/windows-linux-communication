@@ -100,14 +100,27 @@ Input and output are chosen independently. Replies are always printed; `speech` 
 
 ### Wrist computer: natively
 
-On a fresh Pi, run `./setup.sh` once (safe to rerun). It installs everything, creates `~/sirius-venv`, downloads the models, and creates a starter `.env`. Then set `SERVER_IP` and use `./run.sh`.
+**First time:** on a fresh Pi, run `./setup.sh` once (safe to rerun). It installs everything, creates `~/sirius-venv`, downloads the models, and creates a starter `.env`. Then set `SERVER_IP` in `.env`.
 
-Manual install, if you prefer:
+**Running:** from `linux-side/`, pick a preset:
 ```bash
-python3 -m pip install python-dotenv --break-system-packages   # or: sudo apt install python3-dotenv
-./run.sh text
+./run.sh text     # type commands, replies as text
+./run.sh mic      # speak commands, replies as text
+./run.sh speak    # type commands, replies as text + speech
+./run.sh full     # speak commands, replies as text + speech
+./run.sh both     # speak or type commands, replies as text + speech
+./run.sh          # no preset: uses INPUT_MODE / OUTPUT_MODE from .env
 ```
-Text mode needs only `python-dotenv` (plus `piper-tts` and `sounddevice` if you want speech). Voice mode also needs `vosk`, `sounddevice`, `libportaudio2`, and a Vosk model from alphacephei.com/vosk/models.
+Or give any combination of flags directly; they pass straight through to `voice_client.py`:
+```bash
+./run.sh -i both -o text     # speak or type, text-only replies
+./run.sh --help              # all options
+```
+`run.sh` switches into `~/sirius-venv` automatically if it exists, so there's no need to activate it first. Press Ctrl+C to quit; the hub is notified.
+
+Speech output needs a speaker; with none connected, use `text` or `mic`. Voice input needs a microphone.
+
+**Manual install, if you prefer not to use `setup.sh`:** text-only runs need just `python-dotenv`. Speech also needs `piper-tts`, `sounddevice`, `libportaudio2`, and a Piper voice in `voices/`. Voice input also needs `vosk` and a Vosk model from alphacephei.com/vosk/models.
 
 ### Wrist computer: Docker
 Run these from `linux-side/docker/` (or from `linux-side/` with `-f docker/docker-compose.yml` after `docker compose`).

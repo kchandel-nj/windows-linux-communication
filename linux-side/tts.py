@@ -18,7 +18,10 @@ import threading
 import time
 
 TTS_ENGINE = os.getenv("TTS_ENGINE", "piper").strip().lower()
-PIPER_VOICE = os.getenv("PIPER_VOICE", "en_US-lessac-medium.onnx")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+PIPER_VOICE = os.getenv("PIPER_VOICE", "voices/en_US-lessac-medium.onnx")
+if not os.path.isabs(PIPER_VOICE):  # relative paths are relative to this folder
+    PIPER_VOICE = os.path.join(_HERE, PIPER_VOICE)
 _spk = os.getenv("SPEAKER_DEVICE", "").strip()
 SPEAKER_DEVICE = int(_spk) if _spk.isdigit() else (_spk or None)
 
@@ -28,13 +31,14 @@ MIC_QUIET_TAIL = 0.6
 
 
 class Speaker:
-    def __init__(self):
+    def __init__(self, engine=None):
+        """engine overrides TTS_ENGINE from .env (e.g. "none" for text-only output)."""
         self._lock = threading.Lock()   # one utterance at a time
         self._busy = threading.Event()
         self._quiet_until = 0.0
         self._voice = None
         self._warned_aplay = False
-        self.engine = self._init_engine(TTS_ENGINE)
+        self.engine = self._init_engine((engine or TTS_ENGINE).strip().lower())
         print(f"[TTS] Engine: {self.engine}")
 
     # ---------- setup ----------
@@ -100,8 +104,10 @@ class Speaker:
             if not self._warned_aplay:
                 print(f"[TTS] sounddevice output failed ({e}); using aplay instead.")
                 self._warned_aplay = True
-            subprocess.run(["aplay", "-q", "-r", str(rate), "-f", "S16_LE", "-c", "1", "-t", "raw"],
-                           input=audio, check=True)
+            cmd = ["aplay", "-q", "-r", str(rate), "-f", "S16_LE", "-c", "1", "-t", "raw"]
+            if isinstance(SPEAKER_DEVICE, str):  # e.g. "pipewire", "pulse", "plughw:2,0"
+                cmd[1:1] = ["-D", SPEAKER_DEVICE]
+            subprocess.run(cmd, input=audio, check=True)
 
     def _play_sounddevice(self, audio, rate):
         import sounddevice as sd

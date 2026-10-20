@@ -19,9 +19,13 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 |---|---|---|
 | `voice_client.py` | Wrist computer | Captures commands (voice or text), sends them to the hub, prints and speaks replies |
 | `tts.py` | Wrist computer | Offline text-to-speech (Piper, espeak-ng fallback) |
+| `run.sh` | Wrist computer | Presets for the input/output modes |
+| `setup.sh` | Wrist computer | One-time setup: packages, venv, Vosk model, Piper voice, starter `.env` |
 | `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
 | `.env` | Both | IPs, port, device ID, and client settings |
-| `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `.dockerignore` | Wrist computer | Containerized client, Vosk model included |
+| `requirements.txt` | Wrist computer | Python packages (used by Docker and manual installs) |
+| `docker/` | Wrist computer | `Dockerfile`, `docker-compose.yml`, `Dockerfile.dockerignore`; containerized client with models included |
+| `voices/` | Wrist computer | Piper voice files (`.onnx` + `.onnx.json`); downloaded by `setup.sh`, not committed |
 
 ## Configuration (`.env`)
 
@@ -40,11 +44,12 @@ Wrist computer:
 SERVER_IP=192.168.1.50     # hub's IPv4 address (run ipconfig on Windows)
 SERVER_PORT=5001
 DEVICE_ID=linux-node-01
-INPUT_MODE=voice           # voice or text
+INPUT_MODE=voice           # text, voice, or both (default when no -i flag)
+OUTPUT_MODE=speech         # text or speech (default when no -o flag)
 MIC_DEVICE=                # blank = default, or a number/name from the device list
 RESPONSE_TIMEOUT=60        # seconds to wait for Ollama
 TTS_ENGINE=piper           # piper, espeak, or none
-PIPER_VOICE=en_US-lessac-medium.onnx   # Piper voice file (.onnx.json must sit beside it)
+PIPER_VOICE=voices/en_US-lessac-medium.onnx   # relative to the code folder; .onnx.json must sit beside it
 SPEAKER_DEVICE=            # blank = default output, or a number/name from the device list
 ```
 
@@ -72,6 +77,20 @@ Shutdown (either direction; the client listens in the background, so it reacts i
 
 Connections stay open for any number of commands. Each client runs in its own thread, so multiple wrist computers can connect at once.
 
+## Input and output modes
+
+Input and output are chosen independently. Replies are always printed; `speech` also reads them aloud.
+
+| Preset | Flags | Input | Output |
+|---|---|---|---|
+| `./run.sh text` | `-i text -o text` | keyboard | text |
+| `./run.sh mic` | `-i voice -o text` | microphone | text |
+| `./run.sh speak` | `-i text -o speech` | keyboard | text + speech |
+| `./run.sh full` | `-i voice -o speech` | microphone | text + speech |
+| `./run.sh both` | `-i both -o speech` | microphone and keyboard | text + speech |
+
+`run.sh` activates `~/sirius-venv` if it exists. Any flags can also be passed directly: `python3 voice_client.py -i both -o text`. Without flags, `INPUT_MODE` / `OUTPUT_MODE` from `.env` are used. Run `python3 voice_client.py --help` for the full list.
+
 ## Running
 
 ### Hub (Windows)
@@ -80,18 +99,23 @@ Connections stay open for any number of commands. Each client runs in its own th
 3. Run `python pc_server.py`.
 
 ### Wrist computer: natively
+
+On a fresh Pi, run `./setup.sh` once (safe to rerun). It installs everything, creates `~/sirius-venv`, downloads the models, and creates a starter `.env`. Then set `SERVER_IP` and use `./run.sh`.
+
+Manual install, if you prefer:
 ```bash
 python3 -m pip install python-dotenv --break-system-packages   # or: sudo apt install python3-dotenv
-INPUT_MODE=text python3 voice_client.py
+./run.sh text
 ```
 Text mode needs only `python-dotenv` (plus `piper-tts` and `sounddevice` if you want speech). Voice mode also needs `vosk`, `sounddevice`, `libportaudio2`, and a Vosk model from alphacephei.com/vosk/models.
 
 ### Wrist computer: Docker
+Run these from `linux-side/docker/` (or from `linux-side/` with `-f docker/docker-compose.yml` after `docker compose`).
 ```bash
 docker compose build
 
-# Text mode (interactive)
-docker compose run --rm -e INPUT_MODE=text voice-client
+# Any mode (interactive)
+docker compose run --rm voice-client python voice_client.py -i text -o text
 
 # Voice mode
 docker compose run --rm voice-client python -m sounddevice   # find your mic, set MIC_DEVICE
@@ -112,6 +136,7 @@ Native setup:
 ```bash
 python3 -m pip install piper-tts --break-system-packages
 sudo apt install espeak-ng          # optional fallback
+mkdir -p voices && cd voices
 wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
 wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 ```

@@ -55,8 +55,14 @@ if exist .env (
         echo OLLAMA_URL=http://localhost:11434/api/generate
         echo OLLAMA_TIMEOUT=50
         echo OLLAMA_KEEP_ALIVE=-1
+        echo TELEMETRY_SOURCE=demo
+        echo PROMPT_STYLE=classroom
+        echo GUARDRAIL=on
+        echo DEMO_SPEED=10
+        echo DEMO_EVENT_RATE=0.05
+        echo DEMO_SEED=
     )
-    echo   [ok]   created .env
+    echo   [ok]   created .env ^(classroom demo settings^)
 )
 set "MODEL=llama3.2"
 set "PORT=5001"

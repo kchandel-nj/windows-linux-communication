@@ -40,13 +40,18 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", 50))  # keep below the client's RESPONSE_TIMEOUT
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "-1")  # -1 = keep model loaded in VRAM
 
+# Demo / mission switches
+TELEMETRY_SOURCE = os.getenv("TELEMETRY_SOURCE", "none").strip().lower()  # none | demo
+PROMPT_STYLE = os.getenv("PROMPT_STYLE", "mission").strip().lower()       # mission | classroom
+GUARDRAIL = os.getenv("GUARDRAIL", "on").strip().lower() not in ("off", "0", "false", "no")
+
 # Connected clients, so the hub can notify them all when it shuts down
 clients = set()
 clients_lock = threading.Lock()
 shutting_down = threading.Event()
 
 # Edit this to match your real telemetry schema.
-SYSTEM_PROMPT = """You are the onboard voice assistant for a lunar EVA suit system.
+MISSION_PROMPT = """You are the onboard voice assistant for a lunar EVA suit system.
 Each request contains the current suit telemetry as JSON, followed by the crew member's request.
 Respond ONLY with a single JSON object, no markdown, no extra text, using exactly these keys:
   "intent":  short snake_case label for what the crew member asked (e.g. "oxygen_status")
@@ -60,12 +65,38 @@ Rules:
     ideally under 12 words. Format example: "Primary O2 <value>%, Secondary <value>%."
 """
 
+# Friendlier version for student demos (grades 8-12). Still no invented numbers.
+CLASSROOM_PROMPT = """You are the voice assistant in a student demonstration of a NASA lunar spacesuit system.
+The audience is middle and high school students (grades 8-12).
+Each request contains the current (simulated) suit telemetry as JSON, followed by the student's request.
+Respond ONLY with a single JSON object, no markdown, no extra text, using exactly these keys:
+  "intent":  short snake_case label for what was asked (e.g. "oxygen_status", "general_question")
+  "summary": what will be read aloud (rules below)
+  "data":    an object with the telemetry fields and values you used ({} if none)
+
+Rules:
+  - For suit or mission questions, use ONLY values from the telemetry, written exactly as given, with units.
+    Add one short, plain-language note on what it means (for example, whether it is normal).
+  - If "warnings" is not empty, mention the warning first.
+  - For general questions about space, the Moon, spacesuits, or astronauts, answer simply and accurately
+    WITHOUT using any numbers (numbers are only allowed when they come from the telemetry).
+  - If a value is not in the telemetry, say it is unavailable. Never invent readings.
+  - Keep it friendly, clear, and school-appropriate: one or two short sentences, under 25 words.
+  - If a question has nothing to do with space, spacesuits, or the mission, politely steer back to the mission.
+"""
+
+SYSTEM_PROMPT = CLASSROOM_PROMPT if PROMPT_STYLE == "classroom" else MISSION_PROMPT
+
 
 # ---------- Telemetry ----------
 def get_telemetry():
-    """Latest TSS telemetry as a dict.
-    Not connected to the TSS yet, so this returns {} and the assistant will
-    (correctly) report values as unavailable. Replace once the TSS client exists."""
+    """Latest telemetry as a dict.
+    TELEMETRY_SOURCE=demo -> simulated values (demo_telemetry.py)
+    TELEMETRY_SOURCE=none -> {} until the real TSS client exists, so the
+                             assistant (correctly) reports values as unavailable."""
+    if TELEMETRY_SOURCE == "demo":
+        from demo_telemetry import get_demo_telemetry
+        return get_demo_telemetry()
     return {}
 
 
@@ -128,7 +159,7 @@ def handle_message(message):
             return {"status": "ERROR", "device_id": device_id, "command": text,
                     "error": f"Bad model output: {e}"}
         # Guardrail: never let the model speak a number that isn't in the telemetry
-        bad = ungrounded_numbers(str(result.get("summary", "")), telemetry)
+        bad = ungrounded_numbers(str(result.get("summary", "")), telemetry) if GUARDRAIL else set()
         if bad:
             print(f"[GUARD] Blocked ungrounded value(s) {sorted(bad)} in: {result.get('summary')!r}")
             result["summary"] = "Data unavailable."
@@ -222,6 +253,10 @@ def main():
     server_socket.settimeout(1.0)
 
     print(f"[*] Hub listening on port {SERVER_PORT} (Ollama model: {OLLAMA_MODEL})...")
+    if TELEMETRY_SOURCE == "demo":
+        get_telemetry()  # start the simulated EVA clock now
+    print(f"[*] Telemetry: {TELEMETRY_SOURCE} | Prompt: {PROMPT_STYLE} | "
+          f"Guardrail: {'on' if GUARDRAIL else 'OFF'}")
 
     try:
         while True:

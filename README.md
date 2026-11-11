@@ -23,6 +23,7 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 | `setup.sh` | Wrist computer | One-time setup: packages, venv, Vosk model, Piper voice, starter `.env` |
 | `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
 | `setup.bat`, `run.bat` | Hub | One-time Windows setup; start the hub |
+| `demo_telemetry.py` | Hub | Simulated suit telemetry for demos (`TELEMETRY_SOURCE=demo`) |
 | `.env` | Both | IPs, port, device ID, and client settings |
 | `requirements.txt` | Wrist computer | Python packages (used by Docker and manual installs) |
 | `docker/` | Wrist computer | `Dockerfile`, `docker-compose.yml`, `Dockerfile.dockerignore`; containerized client with models included |
@@ -37,6 +38,10 @@ OLLAMA_MODEL=llama3.2
 OLLAMA_URL=http://localhost:11434/api/generate
 OLLAMA_TIMEOUT=50          # keep below the client's RESPONSE_TIMEOUT
 OLLAMA_KEEP_ALIVE=-1       # keep the model loaded in GPU memory (or e.g. 30m)
+TELEMETRY_SOURCE=none      # none (until the TSS client exists) or demo (simulated values)
+PROMPT_STYLE=mission       # mission (terse, NASA style) or classroom (friendly, grades 8-12)
+GUARDRAIL=on               # on, or off to demonstrate hallucinations
+DEMO_SPEED=10              # demo only: simulated EVA minutes per real minute
 ```
 
 Wrist computer:
@@ -176,6 +181,21 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/me
 wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 ```
 Other voices: browse the rhasspy/piper-voices repository on Hugging Face and download both the `.onnx` and `.onnx.json` files.
+
+## Classroom demo mode
+
+For demonstrations to students (grades 8-12), set these in the hub's `.env` and restart `pc_server.py`:
+```
+TELEMETRY_SOURCE=demo
+PROMPT_STYLE=classroom
+```
+The hub's startup line confirms it: `Telemetry: demo | Prompt: classroom | Guardrail: on`.
+
+- **Simulated telemetry** (`demo_telemetry.py`) stands in for NASA's TSS: oxygen and battery drain, heart rate rises and falls, and every 30 simulated minutes a heart-rate spike triggers a `HIGH HEART RATE` warning. `DEMO_SPEED` sets how fast EVA time passes (default 10x, so changes show up within a class period). Restarting the hub restarts the EVA. Run `python demo_telemetry.py` to see current values.
+- **Classroom prompt:** friendly one-to-two-sentence answers that explain what a reading means, mention warnings first, answer general space questions in plain language, and steer off-topic questions back to the mission.
+- **Guardrail demo:** general answers can't include numbers (only telemetry numbers are allowed), so "How far is the Moon?" answered with a number is blocked and spoken as "Data unavailable." To show students why the guardrail exists, set `GUARDRAIL=off`, restart, and ask questions the telemetry can't answer; the model will often make up confident-sounding numbers. Turn it back on afterward.
+
+Good questions to try: "What's my oxygen level?", "How's my heart rate?", "How far am I from the lander?", "Is my battery okay?", "Why do astronauts need spacesuits?"
 
 ## Behavior
 

@@ -15,23 +15,28 @@ set /a WARN=0
 
 :: ---------------------------------------------------------------- 1. Python
 echo == 1/5 Python
-python --version >nul 2>&1
-if not errorlevel 1 goto :python_ok
+:: Prefer the "py" launcher; "python" can be a Microsoft Store shortcut that isn't real Python
+set "PY="
+py -3 --version >nul 2>&1 && set "PY=py -3"
+if not defined PY python --version >nul 2>&1 && set "PY=python"
+if defined PY goto :python_ok
 echo   [..]   Python not found. Installing with winget...
 winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
 echo.
 echo   [warn] Python was just installed. Close this window and run setup.bat again
-echo          so Windows picks up the new "python" command.
+echo          so Windows picks up the new "python" command. If it still isn't found,
+echo          turn off the python.exe entries in Settings ^> Apps ^> Advanced app settings
+echo          ^> App execution aliases.
 pause
 exit /b 1
 :python_ok
-for /f "tokens=2" %%V in ('python --version 2^>^&1') do echo   [ok]   Python %%V
+for /f "tokens=2" %%V in ('!PY! --version 2^>^&1') do echo   [ok]   Python %%V  ^(using "!PY!"^)
 
 :: ---------------------------------------------------------------- 2. Packages
 echo == 2/5 Python packages
 if not exist requirements.txt (echo python-dotenv> requirements.txt)
-python -m pip install --quiet --upgrade pip >nul 2>&1
-python -m pip install --quiet -r requirements.txt
+!PY! -m pip install --quiet --upgrade pip >nul 2>&1
+!PY! -m pip install --quiet -r requirements.txt
 if errorlevel 1 (
     echo   [warn] pip install failed
     set /a WARN+=1

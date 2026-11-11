@@ -25,8 +25,10 @@ WARNINGS=0
 
 echo "== 1/6 System packages"
 sudo apt-get update -qq
-if sudo apt-get install -y -qq python3-venv python3-pip libportaudio2 alsa-utils espeak-ng wget unzip; then
-    ok "python3-venv, libportaudio2, alsa-utils, espeak-ng, wget, unzip"
+if sudo apt-get install -y -qq python3-venv python3-pip libportaudio2 alsa-utils espeak-ng wget unzip \
+        pipewire-alsa pipewire-bin pulseaudio-utils; then
+    ok "python3-venv, libportaudio2, alsa-utils, espeak-ng, wget, unzip, pipewire-alsa, pipewire-bin, pulseaudio-utils"
+    echo "         (if pipewire-alsa was newly installed, reboot once so audio routes through PipeWire)"
 else
     warn "apt install failed; check your internet connection and rerun"
 fi

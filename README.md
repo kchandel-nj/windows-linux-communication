@@ -139,6 +139,26 @@ docker compose logs -f
 docker compose stop          # sends SHUTDOWN to the hub
 ```
 
+## Audio setup (Raspberry Pi)
+
+The Pi 5 has no headphone jack or built-in mic, so use a USB headset (easiest: mic and speaker in one), or a USB/Bluetooth speaker plus a USB mic.
+
+1. Make sure ALSA programs are routed through PipeWire (`setup.sh` installs these; reboot after installing by hand):
+   ```bash
+   sudo apt install pipewire-alsa pipewire-bin pulseaudio-utils
+   ```
+2. Select the headset for **output and input** from the taskbar speaker icon, or with `wpctl status` then `wpctl set-default <number>` (the default sink has a `*`).
+3. Leave `MIC_DEVICE` and `SPEAKER_DEVICE` blank in `.env` so the desktop's selection is used.
+4. Test outside the app:
+   ```bash
+   pw-play /usr/share/sounds/alsa/Front_Center.wav            # speaker via PipeWire
+   speaker-test -t wav -c 2 -l 1                              # speaker via ALSA
+   arecord -d 5 -f S16_LE -r 16000 test.wav && aplay test.wav # mic
+   ```
+5. Run `./run.sh full`. At startup look for `[MIC] Recording at 16000 Hz` and `[TTS] Engine: piper`; after the first reply, `[TTS] Playing through pw-play`.
+
+The client records at 16 kHz (Vosk's native rate, and about a third of the CPU work of 48 kHz) and tries several playback methods in order (`SPEAKER_DEVICE` if set, `pw-play`, `paplay`, sounddevice, `aplay`), keeping the first that works.
+
 ## Text-to-speech
 
 The wrist computer reads each reply's `summary` aloud; errors are spoken as "Assistant unavailable." It also says "Hub offline." / "Hub online." when the connection changes. The hub's system prompt keeps summaries telegraphic, per the NASA guidance ("Primary O2 47%, Secondary 99%.").
@@ -171,7 +191,9 @@ Other voices: browse the rhasspy/piper-voices repository on Hugging Face and dow
 | Client disconnects (Ctrl+C or drop) | Hub prints an `[ALERT]` with the device ID; other clients are unaffected |
 | No reply within `RESPONSE_TIMEOUT` | Treated as a dropped connection |
 
-Log prefixes: `[CONNECTED]`, `[LISTENING]`, `[TEXT MODE]`, `[HEARD]`, `[HUB]`, `[OFFLINE]`, `[ALERT]`, `[RETRY]`, `[SHUTDOWN]`, `[EXIT]`.
+Log prefixes (wrist computer): `[MODE]` chosen input/output, `[MIC]` recording rate, `[TTS]` speech engine and playback method, `[CONNECTED]`, `[LISTENING]`, `[TEXT]`, `[HEARD]` what the mic recognized, `[HUB]` reply, `[SAY]` what's being spoken, `[AUDIO]` audio warnings, `[OFFLINE]`, `[ALERT]`, `[RETRY]`, `[SHUTDOWN]`, `[EXIT]`.
+
+Log prefixes (hub): `[COMMAND]`, `[REPLY]`, `[GUARD]` hallucination guardrail blocked a value, `[Error]`, `[ALERT]`.
 
 ## Troubleshooting
 
@@ -185,17 +207,30 @@ Log prefixes: `[CONNECTED]`, `[LISTENING]`, `[TEXT MODE]`, `[HEARD]`, `[HUB]`, `
 
 **Hub ignores Ctrl+C on Windows:** fixed by the 1-second accept timeout; if you're on an older copy of `pc_server.py`, update it.
 
+**Speech: `[SAY]` appears but nothing is heard:**
+- `[TTS] Playing through sounddevice` (not `pw-play`) and silence usually means ALSA isn't routed to PipeWire, so audio went to another output (e.g. HDMI). Install `pipewire-alsa pipewire-bin` and reboot.
+- Check the headset is the default sink (`wpctl status`, `*`), isn't muted (`wpctl get-volume @DEFAULT_AUDIO_SINK@`), and its cable volume/mute switch.
+- If `pw-play /usr/share/sounds/alsa/Front_Center.wav` is silent too, test the hardware directly: `aplay -l`, then `speaker-test -D plughw:<card>,0 -t wav -c 2 -l 1`. If that works, `SPEAKER_DEVICE=plughw:<card>,0` in `.env` is a direct workaround.
+- `[TTS] Playback failed: no audio output worked -> ...` lists why each method failed.
+- `[TTS] Engine: espeak` or `none`: Piper didn't load (not installed in the venv, or voice missing from `voices/`); the line above it says why.
+
+**`[AUDIO] input overflow`:** a few milliseconds of mic audio were dropped. Occasional ones are harmless (they're reported once, then every 50th). Frequent ones: check `[MIC]` says 16000 Hz and close other heavy programs.
+
 **Voice mode hears nothing:**
-- In a VirtualBox VM: enable Audio Input in VM settings *and* under Devices → Audio while running; try the Windows DirectSound driver or ICH AC97 controller; confirm the Windows mic privacy setting and default input device.
-- Check the input in Ubuntu with `pavucontrol` (not muted, meter moves).
-- On a Linux desktop, route the container through PipeWire/PulseAudio (mount the pulse socket, set `MIC_DEVICE=pulse`) instead of `/dev/snd`.
-- Use `INPUT_MODE=text` to test the rest of the pipeline in the meantime.
+- Select the headset as input in the taskbar sound menu and test with the `arecord` command above.
+- In a VirtualBox VM: enable Audio Input in VM settings *and* under Devices → Audio while running; confirm the Windows mic privacy setting and default input device.
+- In Docker on a desktop, the container must use the PipeWire/PulseAudio compose setup (`MIC_DEVICE=pulse`).
+- Use `./run.sh text` to test the rest of the pipeline in the meantime.
+
+**Hub: "Python was not found" on Windows:** `python` is a Microsoft Store shortcut. Use `py` instead (`setup.bat`/`run.bat` do this automatically), or turn off the python.exe entries under Settings → Apps → Advanced app settings → App execution aliases.
+
+**Hub: 404 from Ollama:** the model in `OLLAMA_MODEL` isn't pulled on this PC (`ollama pull <name>`), or `.env` isn't being read (the startup line shows which model is in use).
 
 ## Status
 
 - Socket link, reconnect, shutdown alerts, `.env` config, and Docker packaging: working.
 - Text mode end to end (wrist → hub → Ollama → wrist): working.
 - Ollama responses are not yet grounded in live TSS data.
-- Voice mode: mic input not yet reaching the Ubuntu VirtualBox test machine. Not expected to affect the Raspberry Pi target.
-- Text-to-speech of reply summaries: implemented; to be tested on the target audio hardware.
+- Voice input and spoken replies on the Raspberry Pi 5 with a USB headset: working.
+- Hallucination guardrail: blocks any spoken number not present in telemetry.
 - Planned: relaying responses to the HMD.

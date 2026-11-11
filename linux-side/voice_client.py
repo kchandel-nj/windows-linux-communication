@@ -251,20 +251,38 @@ class VoiceInput:
 
         self.sd = sd
         self.speaker = speaker
-        self.samplerate = int(sd.query_devices(MIC_DEVICE, "input")["default_samplerate"])
+        self.samplerate = self._pick_samplerate()
+        print(f"[MIC] Recording at {self.samplerate} Hz")
         self.rec = KaldiRecognizer(Model(MODEL_PATH), self.samplerate)
         self.audio_q = queue.Queue()
+        self.overflows = 0
+
+    def _pick_samplerate(self):
+        """Vosk's models are trained at 16 kHz, and recording at 16 kHz is ~3x less work
+        than 48 kHz, which helps the Pi keep up. PipeWire resamples if the mic can't."""
+        try:
+            self.sd.check_input_settings(device=MIC_DEVICE, samplerate=16000,
+                                         channels=1, dtype="int16")
+            return 16000
+        except Exception:
+            return int(self.sd.query_devices(MIC_DEVICE, "input")["default_samplerate"])
 
     def _callback(self, indata, frames, time_info, status):
         if status:
-            print(f"[AUDIO] {status}", file=sys.stderr)
+            # An occasional overflow just drops a few milliseconds of audio. Report it
+            # once, then only every 50th time, so the console stays readable.
+            self.overflows += 1
+            if self.overflows == 1 or self.overflows % 50 == 0:
+                print(f"[AUDIO] {status} (x{self.overflows})", file=sys.stderr)
         if self.speaker.is_active():
             return  # don't transcribe our own voice
         self.audio_q.put(bytes(indata))
 
     def run(self, link):
-        with self.sd.RawInputStream(samplerate=self.samplerate, blocksize=8000, device=MIC_DEVICE,
-                                    dtype="int16", channels=1, callback=self._callback):
+        # latency="high" gives the audio system a bigger buffer, which prevents overflows
+        with self.sd.RawInputStream(samplerate=self.samplerate, blocksize=4000, device=MIC_DEVICE,
+                                    dtype="int16", channels=1, latency="high",
+                                    callback=self._callback):
             print("[LISTENING] Speak a command")
             while True:
                 data = self.audio_q.get()

@@ -39,7 +39,7 @@ class Speaker:
         self._busy = threading.Event()
         self._quiet_until = 0.0
         self._voice = None
-        self._warned_aplay = False
+        self._player = None  # playback method that worked, reused after the first success
         if quiet:
             self.engine = "none"
         else:
@@ -99,26 +99,63 @@ class Speaker:
             return
         rate = chunks[0].sample_rate
         audio = b"".join(c.audio_int16_bytes for c in chunks)
-        try:
-            self._play_sounddevice(audio, rate)
-        except Exception as e:
-            # PortAudio sometimes finds no default output (e.g. "Error querying
-            # device -1"); aplay goes through ALSA's default, which PipeWire handles
-            if not shutil.which("aplay"):
-                raise
-            if not self._warned_aplay:
-                print(f"[TTS] sounddevice output failed ({e}); using aplay instead.")
-                self._warned_aplay = True
-            cmd = ["aplay", "-q", "-r", str(rate), "-f", "S16_LE", "-c", "1", "-t", "raw"]
-            if isinstance(SPEAKER_DEVICE, str):  # e.g. "pipewire", "pulse", "plughw:2,0"
-                cmd[1:1] = ["-D", SPEAKER_DEVICE]
-            subprocess.run(cmd, input=audio, check=True)
+        self._play(audio, rate)
 
-    def _play_sounddevice(self, audio, rate):
-        import sounddevice as sd
-        with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
-                                device=SPEAKER_DEVICE) as stream:
-            stream.write(audio)
+    # ---------- playback ----------
+    def _players(self):
+        """Ways to play raw 16-bit mono audio, most reliable first.
+        pw-play / paplay send audio straight to the desktop's default output
+        (whatever is selected in the taskbar sound menu, e.g. a USB headset)."""
+        players = []
+        if SPEAKER_DEVICE is not None:  # an explicit choice wins
+            players.append(("sounddevice", SPEAKER_DEVICE))
+        if shutil.which("pw-play"):
+            players.append(("pw-play", None))
+        if shutil.which("paplay"):
+            players.append(("paplay", None))
+        players.append(("sounddevice", None))
+        if shutil.which("aplay"):
+            for dev in ("pipewire", "pulse", "default"):
+                players.append(("aplay", dev))
+        return players
+
+    def _play(self, audio, rate):
+        # Reuse whatever worked last time
+        if self._player:
+            try:
+                return self._run_player(self._player, audio, rate)
+            except Exception:
+                self._player = None  # device unplugged etc.; search again
+
+        errors = []
+        for player in self._players():
+            try:
+                self._run_player(player, audio, rate)
+                self._player = player
+                name, dev = player
+                print(f"[TTS] Playing through {name}" + (f" ({dev})" if dev is not None else ""))
+                return
+            except Exception as e:
+                errors.append(f"{player[0]}{'(' + str(player[1]) + ')' if player[1] is not None else ''}: {e}")
+        raise RuntimeError("no audio output worked -> " + " | ".join(errors))
+
+    @staticmethod
+    def _run_player(player, audio, rate):
+        name, dev = player
+        if name == "sounddevice":
+            import sounddevice as sd
+            with sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16", device=dev) as stream:
+                stream.write(audio)
+            return
+        if name == "pw-play":
+            cmd = ["pw-play", "--rate", str(rate), "--channels", "1", "--format", "s16", "-"]
+        elif name == "paplay":
+            cmd = ["paplay", "--raw", f"--rate={rate}", "--channels=1", "--format=s16le"]
+        else:  # aplay
+            cmd = ["aplay", "-q", "-D", dev, "-r", str(rate), "-f", "S16_LE", "-c", "1", "-t", "raw"]
+        result = subprocess.run(cmd, input=audio, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace").strip()[:120] or f"exit {result.returncode}")
 
 
 def spoken_text(reply):

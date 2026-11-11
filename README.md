@@ -31,17 +31,19 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 
 ## Configuration (`.env`)
 
-Hub (`.env` one folder above `pc_server.py`):
+Hub (`.env` next to `pc_server.py`, or one folder up). **On the `classroom-demo` branch this sample is preset for the classroom demo**; copy it as-is:
 ```
 SERVER_PORT=5001
 OLLAMA_MODEL=llama3.2
 OLLAMA_URL=http://localhost:11434/api/generate
 OLLAMA_TIMEOUT=50          # keep below the client's RESPONSE_TIMEOUT
 OLLAMA_KEEP_ALIVE=-1       # keep the model loaded in GPU memory (or e.g. 30m)
-TELEMETRY_SOURCE=none      # none (until the TSS client exists) or demo (simulated values)
-PROMPT_STYLE=mission       # mission (terse, NASA style) or classroom (friendly, grades 8-12)
+TELEMETRY_SOURCE=demo      # demo (simulated values) or none (until the TSS client exists)
+PROMPT_STYLE=classroom     # classroom (friendly, grades 8-12) or mission (terse, NASA style)
 GUARDRAIL=on               # on, or off to demonstrate hallucinations
 DEMO_SPEED=10              # demo only: simulated EVA minutes per real minute
+DEMO_EVENT_RATE=0.05       # demo only: chance of a random event each simulated minute (0 = none)
+DEMO_SEED=                 # demo only: a number replays the same EVA every time; blank = new EVA each run
 ```
 
 Wrist computer:
@@ -184,14 +186,23 @@ Other voices: browse the rhasspy/piper-voices repository on Hugging Face and dow
 
 ## Classroom demo mode
 
-For demonstrations to students (grades 8-12), set these in the hub's `.env` and restart `pc_server.py`:
-```
-TELEMETRY_SOURCE=demo
-PROMPT_STYLE=classroom
-```
-The hub's startup line confirms it: `Telemetry: demo | Prompt: classroom | Guardrail: on`.
+This branch (`classroom-demo`) is set up for demonstrations to students (grades 8-12). The hub `.env` sample under Configuration, and the starter `.env` that `setup.bat` creates, already turn demo mode on (`TELEMETRY_SOURCE=demo`, `PROMPT_STYLE=classroom`). Start `pc_server.py` and check the startup line: `Telemetry: demo | Prompt: classroom | Guardrail: on`.
 
-- **Simulated telemetry** (`demo_telemetry.py`) stands in for NASA's TSS: oxygen and battery drain, heart rate rises and falls, and every 30 simulated minutes a heart-rate spike triggers a `HIGH HEART RATE` warning. `DEMO_SPEED` sets how fast EVA time passes (default 10x, so changes show up within a class period). Restarting the hub restarts the EVA. Run `python demo_telemetry.py` to see current values.
+To run the regular mission behavior instead, change those two lines to `TELEMETRY_SOURCE=none` and `PROMPT_STYLE=mission`, or use the `main` branch.
+
+- **Simulated telemetry** (`demo_telemetry.py`) stands in for NASA's TSS, and every run is different: starting values and drain rates are randomized, readings wander naturally, and random events occur during the EVA, each triggering warnings:
+
+  | Event | What happens | Warnings |
+  |---|---|---|
+  | Exertion | heart rate climbs ~50 bpm | `HIGH HEART RATE` |
+  | O2 leak | oxygen drains 4x faster, suit pressure dips | `RAPID O2 LOSS`, `LOW SUIT PRESSURE` |
+  | CO2 scrubber saturation | CO2 climbs until the scrubber switches A to B | `HIGH CO2` |
+  | Overheating | suit temperature rises toward 85 F | `SUIT TEMPERATURE HIGH` |
+  | Battery drain | battery drains 5x faster | `LOW BATTERY` (once below 20%) |
+
+  Every reading also changes from moment to moment: oxygen and battery drain smoothly (shown to two decimals), the EVA clock runs, position keeps moving, and sensors carry small jitter, so asking the same question twice always gives a slightly different answer. The hub's guardrail accepts a telemetry value exactly or rounded (99.43 may be spoken as "99" or "99.4").
+
+  The suit also reacts on its own: primary O2 hands over to secondary when nearly empty. `DEMO_SPEED` sets how fast EVA time passes (default 10x, so changes show up within a class period), `DEMO_EVENT_RATE` how often events happen, and `DEMO_SEED` replays an identical EVA, useful for rehearsing a demo. Restarting the hub starts a new EVA. Run `python demo_telemetry.py` to preview a whole 4-hour EVA instantly.
 - **Classroom prompt:** friendly one-to-two-sentence answers that explain what a reading means, mention warnings first, answer general space questions in plain language, and steer off-topic questions back to the mission.
 - **Guardrail demo:** general answers can't include numbers (only telemetry numbers are allowed), so "How far is the Moon?" answered with a number is blocked and spoken as "Data unavailable." To show students why the guardrail exists, set `GUARDRAIL=off`, restart, and ask questions the telemetry can't answer; the model will often make up confident-sounding numbers. Turn it back on afterward.
 

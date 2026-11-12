@@ -41,6 +41,7 @@ OLLAMA_KEEP_ALIVE=-1       # keep the model loaded in GPU memory (or e.g. 30m)
 TELEMETRY_SOURCE=demo      # demo (simulated values) or none (until the TSS client exists)
 PROMPT_STYLE=classroom     # classroom (friendly, grades 8-12) or mission (terse, NASA style)
 GUARDRAIL=on               # on, or off to demonstrate hallucinations
+MOVIE_REFS=on              # classroom only: occasional space-movie references (on/off)
 DEMO_SPEED=10              # demo only: simulated EVA minutes per real minute
 DEMO_EVENT_RATE=0.05       # demo only: chance of a random event each simulated minute (0 = none)
 DEMO_SEED=                 # demo only: a number replays the same EVA every time; blank = new EVA each run
@@ -186,7 +187,7 @@ Other voices: browse the rhasspy/piper-voices repository on Hugging Face and dow
 
 ## Classroom demo mode
 
-This branch (`classroom-demo`) is set up for demonstrations to students (grades 8-12). The hub `.env` sample under Configuration, and the starter `.env` that `setup.bat` creates, already turn demo mode on (`TELEMETRY_SOURCE=demo`, `PROMPT_STYLE=classroom`). Start `pc_server.py` and check the startup line: `Telemetry: demo | Prompt: classroom | Guardrail: on`.
+This branch (`classroom-demo`) is set up for demonstrations to students (grades 8-12). The hub `.env` sample under Configuration, and the starter `.env` that `setup.bat` creates, already turn demo mode on (`TELEMETRY_SOURCE=demo`, `PROMPT_STYLE=classroom`). Start `pc_server.py` and check the startup line: `Telemetry: demo | Prompt: classroom | Guardrail: on | Movie refs: on`.
 
 To run the regular mission behavior instead, change those two lines to `TELEMETRY_SOURCE=none` and `PROMPT_STYLE=mission`, or use the `main` branch.
 
@@ -204,6 +205,7 @@ To run the regular mission behavior instead, change those two lines to `TELEMETR
 
   The suit also reacts on its own: primary O2 hands over to secondary when nearly empty. `DEMO_SPEED` sets how fast EVA time passes (default 10x, so changes show up within a class period), `DEMO_EVENT_RATE` how often events happen, and `DEMO_SEED` replays an identical EVA, useful for rehearsing a demo. Restarting the hub starts a new EVA. Run `python demo_telemetry.py` to preview a whole 4-hour EVA instantly.
 - **Classroom prompt:** friendly one-to-two-sentence answers that explain what a reading means, mention warnings first, answer general space questions in plain language, and steer off-topic questions back to the mission.
+- **Space movie references** (`MOVIE_REFS=on`): about one answer in three ties in a space movie from a fixed, age-appropriate list in `pc_server.py` (`SPACE_MOVIES`), each with a hook that matches a topic: *Apollo 13* for CO2 scrubbers, *Gravity* for spacewalks and oxygen, *The Martian* for supplies, *Hidden Figures* for navigation math, *First Man* for the Moon, *2001: A Space Odyssey* for trusting AI, plus *WALL-E*, *Toy Story*, and *Star Wars*. The model only uses movies on that list (asking a small model to mention movies freely leads to invented plot details), describes the connection in its own words, and never makes a movie reference while a warning is active. Numbers in movie titles ("Apollo 13") don't trip the guardrail. Edit `SPACE_MOVIES` to add or change movies.
 - **Guardrail demo:** general answers can't include numbers (only telemetry numbers are allowed), so "How far is the Moon?" answered with a number is blocked and spoken as "Data unavailable." To show students why the guardrail exists, set `GUARDRAIL=off`, restart, and ask questions the telemetry can't answer; the model will often make up confident-sounding numbers. Turn it back on afterward.
 
 Good questions to try: "What's my oxygen level?", "How's my heart rate?", "How far am I from the lander?", "Is my battery okay?", "Why do astronauts need spacesuits?"

@@ -44,6 +44,7 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "-1")  # -1 = keep model load
 TELEMETRY_SOURCE = os.getenv("TELEMETRY_SOURCE", "none").strip().lower()  # none | demo
 PROMPT_STYLE = os.getenv("PROMPT_STYLE", "mission").strip().lower()       # mission | classroom
 GUARDRAIL = os.getenv("GUARDRAIL", "on").strip().lower() not in ("off", "0", "false", "no")
+MOVIE_REFS = os.getenv("MOVIE_REFS", "on").strip().lower() not in ("off", "0", "false", "no")  # classroom only
 
 # Connected clients, so the hub can notify them all when it shuts down
 clients = set()
@@ -85,7 +86,36 @@ Rules:
   - If a question has nothing to do with space, spacesuits, or the mission, politely steer back to the mission.
 """
 
-SYSTEM_PROMPT = CLASSROOM_PROMPT if PROMPT_STYLE == "classroom" else MISSION_PROMPT
+# Space movies the classroom assistant may mention, each with a hook it can use.
+# A fixed, checked list keeps references accurate and age-appropriate
+# (a small model asked to "mention movies" freely will invent plot details).
+SPACE_MOVIES = [
+    ("Apollo 13",              "CO2 / scrubbers / teamwork",   "the crew and engineers improvised a CO2 scrubber fix to get home safely (a true story)"),
+    ("Gravity",                "spacewalks / O2 / suit safety", "astronauts on a spacewalk must watch their oxygen and stay tethered"),
+    ("The Martian",            "supplies / problem solving",   "an astronaut stranded on Mars solves problems with science and careful use of supplies"),
+    ("Hidden Figures",         "math / navigation / NASA",     "NASA mathematicians calculated the paths that got astronauts home (a true story)"),
+    ("First Man",              "the Moon / landing",           "Neil Armstrong's journey to becoming the first person to walk on the Moon (a true story)"),
+    ("2001: A Space Odyssey",  "AI / trusting computers",      "the ship's computer HAL shows why AI in space needs safeguards"),
+    ("WALL-E",                 "robots / helpers",             "a small robot helps people in space"),
+    ("Toy Story",              "fun / space explorers",        "Buzz Lightyear, the toy space ranger"),
+    ("Star Wars",              "fiction vs. real space",       "fun fiction, though real spacesuits work very differently"),
+]
+
+MOVIE_RULES = """
+Space movie references (to keep students interested):
+  - When it fits naturally (roughly one answer in three), add a short reference to ONE movie from this list,
+    using its hook. Do not mention any other movies.
+""" + "\n".join(f"      {title}: {topic} -> {hook}" for title, topic, hook in SPACE_MOVIES) + """
+  - Describe the connection in your own words; never quote movie dialogue.
+  - Never make a movie reference when "warnings" is not empty; warnings must stay serious and clear.
+  - Do not use numbers in the movie reference (except a movie's title).
+  - With a movie reference, the summary may be up to 35 words.
+"""
+
+if PROMPT_STYLE == "classroom":
+    SYSTEM_PROMPT = CLASSROOM_PROMPT + (MOVIE_RULES if MOVIE_REFS else "")
+else:
+    SYSTEM_PROMPT = MISSION_PROMPT
 
 
 # ---------- Telemetry ----------
@@ -105,10 +135,25 @@ def get_telemetry():
 _NUMBER = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 
 
+# Movie titles with numbers in them ("Apollo 13") aren't readings; the guardrail skips them
+_TITLE_NUMBERS = re.compile("|".join(re.escape(t) for t, _, _ in SPACE_MOVIES if re.search(r"\d", t)),
+                            re.IGNORECASE)
+
+
 def ungrounded_numbers(summary, telemetry):
-    """Numbers spoken in the summary that don't appear anywhere in the telemetry."""
+    """Numbers spoken in the summary that don't appear anywhere in the telemetry.
+    A telemetry value may be spoken exactly or rounded (96.4 -> "96"), since that's
+    the same real reading, not an invented one."""
+    if PROMPT_STYLE == "classroom" and MOVIE_REFS:
+        summary = _TITLE_NUMBERS.sub("", summary or "")
     spoken = set(_NUMBER.findall(summary or ""))
-    known = set(_NUMBER.findall(json.dumps(telemetry)))
+    known = set()
+    for n in _NUMBER.findall(json.dumps(telemetry)):
+        known.add(n)
+        if "." in n:
+            value = float(n)
+            known.add(str(round(value)))
+            known.add(f"{value:.1f}")
     return spoken - known
 
 
@@ -256,7 +301,8 @@ def main():
     if TELEMETRY_SOURCE == "demo":
         get_telemetry()  # start the simulated EVA clock now
     print(f"[*] Telemetry: {TELEMETRY_SOURCE} | Prompt: {PROMPT_STYLE} | "
-          f"Guardrail: {'on' if GUARDRAIL else 'OFF'}")
+          f"Guardrail: {'on' if GUARDRAIL else 'OFF'}"
+          + (f" | Movie refs: {'on' if MOVIE_REFS else 'off'}" if PROMPT_STYLE == "classroom" else ""))
 
     try:
         while True:

@@ -58,6 +58,7 @@ if exist .env (
         echo TELEMETRY_SOURCE=demo
         echo PROMPT_STYLE=classroom
         echo GUARDRAIL=on
+        echo MOVIE_REFS=on
         echo DEMO_SPEED=10
         echo DEMO_EVENT_RATE=0.05
         echo DEMO_SEED=

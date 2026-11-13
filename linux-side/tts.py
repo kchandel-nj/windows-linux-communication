@@ -40,6 +40,7 @@ class Speaker:
         self._quiet_until = 0.0
         self._voice = None
         self._player = None  # playback method that worked, reused after the first success
+        self._warned_beep = False
         if quiet:
             self.engine = "none"
         else:
@@ -101,6 +102,20 @@ class Speaker:
         audio = b"".join(c.audio_int16_bytes for c in chunks)
         self._play(audio, rate)
 
+    # ---------- wake beep ----------
+    def beep(self):
+        """Short confirmation tone, played in the background so the mic keeps
+        listening (a tone isn't transcribed as words, so no mic gating needed)."""
+        threading.Thread(target=self._beep_safe, daemon=True).start()
+
+    def _beep_safe(self):
+        try:
+            self._play(_BEEP, _BEEP_RATE)
+        except Exception as e:
+            if not self._warned_beep:
+                print(f"[TTS] Beep failed: {e}")
+                self._warned_beep = True
+
     # ---------- playback ----------
     def _players(self):
         """Ways to play raw 16-bit mono audio, most reliable first.
@@ -109,6 +124,8 @@ class Speaker:
         players = []
         if SPEAKER_DEVICE is not None:  # an explicit choice wins
             players.append(("sounddevice", SPEAKER_DEVICE))
+            if isinstance(SPEAKER_DEVICE, str) and shutil.which("aplay"):
+                players.append(("aplay", SPEAKER_DEVICE))  # e.g. SPEAKER_DEVICE=plughw:2,0
         if shutil.which("pw-play"):
             players.append(("pw-play", None))
         if shutil.which("paplay"):
@@ -156,6 +173,23 @@ class Speaker:
         result = subprocess.run(cmd, input=audio, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.decode(errors="replace").strip()[:120] or f"exit {result.returncode}")
+
+
+def _make_beep(rate=22050, freq=880, seconds=0.15, volume=0.35):
+    """A short sine tone with a quick fade in/out (no click), as 16-bit mono bytes."""
+    import math
+    import struct
+    n = int(rate * seconds)
+    fade = int(rate * 0.01)
+    samples = []
+    for i in range(n):
+        env = min(1.0, i / fade, (n - i) / fade)
+        samples.append(int(32767 * volume * env * math.sin(2 * math.pi * freq * i / rate)))
+    return struct.pack(f"<{n}h", *samples)
+
+
+_BEEP_RATE = 22050
+_BEEP = _make_beep(_BEEP_RATE)
 
 
 def spoken_text(reply):

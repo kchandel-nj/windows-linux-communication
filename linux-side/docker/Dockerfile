@@ -23,5 +23,5 @@ RUN mkdir -p /app/voices \
 ENV PIPER_VOICE=voices/en_US-lessac-medium.onnx
 
 ENV PYTHONUNBUFFERED=1
-COPY voice_client.py tts.py ./
+COPY voice_client.py tts.py wake.py ./
 CMD ["python", "voice_client.py"]

@@ -40,6 +40,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 from tts import Speaker, spoken_text  # after load_dotenv so it sees TTS settings
+from wake import find_wake, WAKE_PHRASE, WAKE_TIMEOUT
 
 SERVER_IP = os.getenv("SERVER_IP", "127.0.0.1")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "5001"))
@@ -239,7 +240,10 @@ def text_loop(link):
 class VoiceInput:
     """Microphone -> Vosk speech-to-text. Loads the model up front so problems show immediately."""
 
-    def __init__(self, speaker):
+    def __init__(self, speaker, wake=True):
+        self.wake = wake
+        self.awake_until = 0.0    # monotonic time when the follow-up window closes
+        self.beeped = False       # already beeped for the utterance in progress
         # Imported here so text-only runs work without audio libraries installed
         import sounddevice as sd
         from vosk import Model, KaldiRecognizer, SetLogLevel
@@ -278,23 +282,82 @@ class VoiceInput:
             return  # don't transcribe our own voice
         self.audio_q.put(bytes(indata))
 
+    # ---------- wake word ----------
+    def _is_awake(self):
+        return time.monotonic() < self.awake_until
+
+    def _wake_up(self):
+        if not self.beeped:
+            self.speaker.beep()
+            self.beeped = True
+            print(f"[WAKE] Listening (follow-ups for {WAKE_TIMEOUT:.0f}s)")
+        self.awake_until = time.monotonic() + WAKE_TIMEOUT
+
+    def _check_partial(self):
+        """Beep as soon as the wake phrase shows up mid-sentence, not after it ends."""
+        if self.beeped or self._is_awake():
+            return
+        partial = json.loads(self.rec.PartialResult()).get("partial", "")
+        if find_wake(partial) is not None:
+            self._wake_up()
+
+    def _command_from(self, text):
+        """Decide what (if anything) to send for a finished utterance."""
+        if not self.wake:
+            return text
+        after = find_wake(text)
+        if after is not None:              # "hey sirius ..." (with or without a command)
+            self._wake_up()
+            return after or None
+        if self.beeped:                    # partial heard the wake word, final text dropped it
+            self.awake_until = time.monotonic() + WAKE_TIMEOUT
+            return text
+        if self._is_awake():               # follow-up within the window
+            return text
+        print(f"[ASLEEP] Ignored: {text}  (say \"{WAKE_PHRASE}\" first)")
+        return None
+
+    # ---------- main loop ----------
     def run(self, link):
         # latency="high" gives the audio system a bigger buffer, which prevents overflows
         with self.sd.RawInputStream(samplerate=self.samplerate, blocksize=4000, device=MIC_DEVICE,
                                     dtype="int16", channels=1, latency="high",
                                     callback=self._callback):
-            print("[LISTENING] Speak a command")
+            if self.wake:
+                print(f"[LISTENING] Say \"{WAKE_PHRASE}\" to start")
+            else:
+                print("[LISTENING] Speak a command")
+            was_awake = False
             while True:
-                data = self.audio_q.get()
+                try:
+                    data = self.audio_q.get(timeout=0.5)
+                except queue.Empty:
+                    data = None
+
+                # Announce when the follow-up window closes
+                awake = self._is_awake()
+                if was_awake and not awake and self.wake:
+                    print(f"[SLEEP] Say \"{WAKE_PHRASE}\" to wake")
+                was_awake = awake
+                if data is None:
+                    continue
+
                 if not self.rec.AcceptWaveform(data):
+                    if self.wake:
+                        self._check_partial()
                     continue  # phrase not finished yet
 
                 text = json.loads(self.rec.Result()).get("text", "").strip()
-                if not text:
+                command = self._command_from(text) if text else None
+                self.beeped = False
+                if not command:
                     continue
 
-                print(f"[HEARD] {text}")
-                link.send_command(text)
+                print(f"[HEARD] {command}")
+                link.send_command(command)
+                if self.wake:  # follow-up window starts after the reply is finished
+                    self.awake_until = time.monotonic() + WAKE_TIMEOUT
+                    was_awake = True
                 with self.audio_q.mutex:   # drop anything captured while waiting / speaking
                     self.audio_q.queue.clear()
                 self.rec.Reset()
@@ -315,6 +378,9 @@ def parse_args():
     parser.add_argument("-i", "--input", choices=["text", "voice", "both"],
                         default=os.getenv("INPUT_MODE", "voice").strip().lower(),
                         help="how commands are given (default: INPUT_MODE in .env, else voice)")
+    parser.add_argument("-w", "--wake", choices=["on", "off"],
+                        default=os.getenv("WAKE_WORD", "on").strip().lower(),
+                        help='require the wake word before voice commands (default: WAKE_WORD in .env, else on)')
     parser.add_argument("-o", "--output", choices=["text", "speech"],
                         default=os.getenv("OUTPUT_MODE", "speech").strip().lower(),
                         help="how replies are given; text always prints (default: OUTPUT_MODE in .env, else speech)")
@@ -322,6 +388,8 @@ def parse_args():
     # defaults from .env aren't checked by argparse, so check them here
     if args.input not in ("text", "voice", "both"):
         parser.error(f"INPUT_MODE must be text, voice, or both (got '{args.input}')")
+    if args.wake not in ("on", "off"):
+        parser.error(f"WAKE_WORD must be on or off (got '{args.wake}')")
     if args.output not in ("text", "speech"):
         parser.error(f"OUTPUT_MODE must be text or speech (got '{args.output}')")
     return args
@@ -329,10 +397,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    print(f"[MODE] input: {args.input}  |  output: {args.output}")
+    wake_note = f"  |  wake word: {args.wake}" if args.input != "text" else ""
+    print(f"[MODE] input: {args.input}  |  output: {args.output}{wake_note}")
 
     speaker = Speaker(quiet=True) if args.output == "text" else Speaker()
-    voice = VoiceInput(speaker) if args.input in ("voice", "both") else None
+    voice = VoiceInput(speaker, wake=(args.wake == "on")) if args.input in ("voice", "both") else None
 
     link = HubLink(speaker)
     try:

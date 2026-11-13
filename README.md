@@ -18,7 +18,8 @@ Wrist computer (Linux / Pi)  ──TCP, newline JSON──▶  Central hub (Wind
 | File | Where it runs | Purpose |
 |---|---|---|
 | `voice_client.py` | Wrist computer | Captures commands (voice or text), sends them to the hub, prints and speaks replies |
-| `tts.py` | Wrist computer | Offline text-to-speech (Piper, espeak-ng fallback) |
+| `tts.py` | Wrist computer | Offline text-to-speech (Piper, espeak-ng fallback) and the wake beep |
+| `wake.py` | Wrist computer | Wake word ("hey SIRIUS") detection |
 | `run.sh` | Wrist computer | Presets for the input/output modes |
 | `setup.sh` | Wrist computer | One-time setup: packages, venv, Vosk model, Piper voice, starter `.env` |
 | `pc_server.py` | Hub | Multi-client TCP server; sends voice commands to Ollama and returns JSON |
@@ -59,6 +60,9 @@ MIC_DEVICE=                # blank = default, or a number/name from the device l
 RESPONSE_TIMEOUT=60        # seconds to wait for Ollama
 TTS_ENGINE=piper           # piper, espeak, or none
 SPEAKER_DEVICE=            # blank = default output, or a number/name from the device list
+WAKE_WORD=on               # on: voice commands need "hey SIRIUS" first; off: every utterance is a command
+WAKE_PHRASE=hey sirius
+WAKE_TIMEOUT=10            # seconds to keep listening for follow-ups after a command
 VOSK_MODEL_PATH=vosk-model-small-en-us-0.15   # unzipped Vosk model folder (voice input)
 PIPER_VOICE=voices/en_US-lessac-medium.onnx   # Piper voice; its .onnx.json must sit beside it
 ```
@@ -147,6 +151,18 @@ docker compose logs -f
 docker compose stop          # sends SHUTDOWN to the hub
 ```
 
+## Wake word
+
+With `WAKE_WORD=on` (the default), the mic ignores speech until it hears **"hey SIRIUS"**, so classroom chatter and conversation aren't sent as commands. Text input never needs it.
+
+- Say it in one breath: "Hey SIRIUS, what's my oxygen level?", or say "Hey SIRIUS", wait for the **beep**, then the command.
+- After a reply it stays awake for `WAKE_TIMEOUT` seconds (default 10), so follow-ups need no wake word: "Hey SIRIUS, what's my oxygen?" ... "And my heart rate?"
+- The beep plays as soon as the wake phrase is recognized, even mid-sentence, and doesn't pause the mic.
+- Console: `[WAKE]` heard the wake word, `[SLEEP]` follow-up window closed, `[ASLEEP] Ignored: ...` speech without the wake word (useful for seeing what the mic hears).
+- Turn it off for one run with `./run.sh full --wake off` (or `-w off`), or for good with `WAKE_WORD=off`.
+
+"Sirius" isn't a common word, so Vosk often hears "serious", "series", or "cirrus"; those sound-alikes count too. Saying "a serious problem" won't trigger it, since it needs "hey"/"hay"/"hi" in front. If you change `WAKE_PHRASE`, watch the `[ASLEEP]` lines to see how Vosk hears it, and add those spellings to `WAKE_ALIASES` (comma-separated), e.g. `WAKE_ALIASES=hey serious, a serious`. Test the matcher with `python3 wake.py "hey serious what is my oxygen"`.
+
 ## Audio setup (Raspberry Pi)
 
 The Pi 5 has no headphone jack or built-in mic, so use a USB headset (easiest: mic and speaker in one), or a USB/Bluetooth speaker plus a USB mic.
@@ -224,7 +240,7 @@ Good questions to try: "What's my oxygen level?", "How's my heart rate?", "How f
 | Client disconnects (Ctrl+C or drop) | Hub prints an `[ALERT]` with the device ID; other clients are unaffected |
 | No reply within `RESPONSE_TIMEOUT` | Treated as a dropped connection |
 
-Log prefixes (wrist computer): `[MODE]` chosen input/output, `[MIC]` recording rate, `[TTS]` speech engine and playback method, `[CONNECTED]`, `[LISTENING]`, `[TEXT]`, `[HEARD]` what the mic recognized, `[HUB]` reply, `[SAY]` what's being spoken, `[AUDIO]` audio warnings, `[OFFLINE]`, `[ALERT]`, `[RETRY]`, `[SHUTDOWN]`, `[EXIT]`.
+Log prefixes (wrist computer): `[MODE]` chosen input/output/wake word, `[WAKE]`, `[SLEEP]`, `[ASLEEP]` wake word events, `[MIC]` recording rate, `[TTS]` speech engine and playback method, `[CONNECTED]`, `[LISTENING]`, `[TEXT]`, `[HEARD]` what the mic recognized, `[HUB]` reply, `[SAY]` what's being spoken, `[AUDIO]` audio warnings, `[OFFLINE]`, `[ALERT]`, `[RETRY]`, `[SHUTDOWN]`, `[EXIT]`.
 
 Log prefixes (hub): `[COMMAND]`, `[REPLY]`, `[GUARD]` hallucination guardrail blocked a value, `[Error]`, `[ALERT]`.
 
